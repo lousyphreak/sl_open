@@ -1,0 +1,11 @@
+image:
+  repository: starlancer
+imagePullSecrets: []
+authSecretName: starlancer-web-basic-auth
+resources: {}
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  tlsSecretName: ""

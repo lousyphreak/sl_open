@@ -1,0 +1,42 @@
+# Build output
+/build/
+/build-*/
+/out/
+/dist/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# Local development settings
+/.cache/
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Original StarLancer data must never enter this repository.
+/game/
+/data/
+/local-data/
+/original-data/
+/retail/
+
+# Runtime user data and logs
+/saves/
+/user-data/
+*.log
+
+helm/**/values-local*.yaml
+
+# Local analysis and deployment files
+/temp/
+/tests/
+/.codex*/
+/.codex*.md
+CMakeUserPresets.json
+.env
+.env.*
