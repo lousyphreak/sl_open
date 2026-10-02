@@ -1035,9 +1035,11 @@ bool parse_gameplay_model(
 	std::size_t cursor = 0;
 	const SroChunk* root = sro_chunk_request(chunks, cursor, 0);
 	const SroChunk* model_records = sro_chunk_request(chunks, cursor, 1);
+	// SRO_read_array_chunk (0x004a2eb0) accepts older record generations.
+	// The Screamer pod has 0x104-byte nodes, before hit points at +0x104.
 	if (root == nullptr || root->count != 1
 		|| model_records == nullptr
-		|| model_records->stride < 0x108
+		|| model_records->stride < 0x104
 		|| model_records->count == 0)
 	{
 		return false;
@@ -1376,8 +1378,11 @@ bool parse_gameplay_model(
 			io::read_le16(source.record + 0xf4);
 		node.gun_part_slot =
 			io::read_le32(source.record + 0xf8);
-		node.maximum_hit_points = static_cast<std::int32_t>(
-			io::read_le32(source.record + 0x104));
+		if (source.stride >= 0x108)
+		{
+			node.maximum_hit_points = static_cast<std::int32_t>(
+				io::read_le32(source.record + 0x104));
+		}
 		if (source.stride >= 0x10c)
 		{
 			node.damage_group_selector =

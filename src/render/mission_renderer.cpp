@@ -18,6 +18,7 @@
 #include "mission/network_runtime.hpp"
 #include "mission/runtime.hpp"
 #include "render/retail_clip.hpp"
+#include "frontend/loadout_layout.hpp"
 
 #include <algorithm>
 #include <array>
@@ -30,6 +31,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <span>
 
 namespace sl_open::render
 {
@@ -661,7 +663,7 @@ float environment_random_unit(std::uint32_t& seed)
 		* (1.0f / 32767.0f);
 }
 
-bool initialize_model_modifier_textures(MissionRenderer& renderer)
+bool initialize_model_modifier_textures(FrontendRenderer& renderer)
 {
 	constexpr float kShapes[4] = {1.0f, 2.0f, 5.0f, 10.0f};
 	for (std::uint32_t texture_index = 0;
@@ -2731,7 +2733,7 @@ bool prepare_gpu_mesh_lighting(
 	float normal_blend,
 	std::uint32_t exclusion_mask,
 	bool static_lighting_enabled,
-	const MissionSceneLights& lights,
+	std::span<const MissionSceneLight> lights,
 	GpuMeshLighting& output)
 {
 	std::uint32_t light_count = 0;
@@ -8880,7 +8882,7 @@ void submit_instance_pass(
 			const bool mode_seven_channel =
 				section.mode == 7
 				&& section.modifier
-					< std::size(renderer.model_modifier_textures)
+					< std::size(frontend.model_modifier_textures)
 				&& ((node.flags & 0x0080u) == 0
 					|| retained_channel_enabled);
 			bgfx::ProgramHandle material_program =
@@ -8903,7 +8905,7 @@ void submit_instance_pass(
 				bgfx::setTexture(
 					1,
 					frontend.material_texture_sampler,
-					renderer.model_modifier_textures[
+					frontend.model_modifier_textures[
 						section.modifier].handle);
 				material_program = gpu_lighting
 					? frontend.lit_model_mode_seven_program
@@ -9413,7 +9415,7 @@ void submit_exploding_meshes(
 			const bool mode_seven_channel =
 				section.mode == 7
 				&& section.modifier
-					< std::size(renderer.model_modifier_textures)
+					< std::size(frontend.model_modifier_textures)
 				&& ((geometry.node_flags & 0x0080u) == 0
 					|| retained_channel_enabled);
 			bgfx::ProgramHandle material_program =
@@ -9431,7 +9433,7 @@ void submit_exploding_meshes(
 				bgfx::setTexture(
 					1,
 					frontend.material_texture_sampler,
-					renderer.model_modifier_textures[
+					frontend.model_modifier_textures[
 						section.modifier].handle);
 				material_program = frontend.model_mode_seven_program;
 			}
@@ -9813,6 +9815,128 @@ void submit_cockpit(
 		frame.simulation_tick,
 		[](std::uint32_t) {});
 }
+}
+
+bool model_renderer_init_materials(FrontendRenderer& renderer)
+{
+	return initialize_model_modifier_textures(renderer);
+}
+
+bool model_renderer_upload(
+	const assets::GameplayModel& source,
+	MissionGpuModel& destination,
+	const bgfx::VertexLayout& layout)
+{
+	return upload_model(source, destination, layout);
+}
+
+void model_renderer_shutdown(MissionGpuModel& model)
+{
+	destroy_model(model);
+}
+
+void model_renderer_submit_preview(
+	const FrontendRenderer& renderer,
+	const MissionGpuModel& model,
+	bgfx::ViewId view,
+	const glm::mat4& transform,
+	bool gun_model,
+	const glm::vec3& color,
+	const glm::vec4& clip_plane,
+	std::uint8_t lod_index)
+{
+	const float uv[] = {0.0f, 0.0f, 1.0f, 1.0f};
+	const float tint[] = {color.r, color.g, color.b, 1.0f};
+	// Loadout_enter registers these lights at 0x00442720. The display
+	// masks exclude the purple and directional lights; wire nodes also
+	// exclude the white point light. The green point light is never inserted.
+	constexpr MissionSceneLight lights[] = {
+		{{15.0f, -15.0f, -10.0f}, {}, {1.0f, 1.0f, 1.0f}, 2.0f, 100000.0f, 2u, 0u},
+		{{}, {}, {0.0f, 1.0f, 0.0f}, 0.2f, 0.0f, 0u, 2u},
+	};
+	const glm::mat3 camera_orientation = glm::transpose(glm::mat3(frontend::loadout_view()));
+	// Gun SHPs contain authored line faces, including their suppressed
+	// edges; the ordinary model importer preserves their topology.
+	for (auto node_index = model.node_indices_in_preorder.rbegin();
+		node_index != model.node_indices_in_preorder.rend(); ++node_index)
+	{
+		const MissionGpuNode& node = model.nodes[*node_index];
+		if (node.lods.empty())
+		{
+			continue;
+		}
+		const MissionGpuLod& lod = node.lods[std::min<std::size_t>(lod_index, node.lods.size() - 1)];
+		const glm::mat4 node_transform = transform * node.object_transform;
+		const glm::vec4 node_clip =
+			glm::transpose(node.object_transform) * clip_plane;
+		const bool wire_node = gun_model && !lod.source_faces.empty()
+			&& lod.source_faces.front().corner_count == 2;
+		GpuMeshLighting lighting;
+		prepare_gpu_mesh_lighting(lod.radius, node_transform, camera_orientation,
+			glm::length(glm::vec3(node_transform[0])), 0.0f,
+			wire_node ? 0xfffbu : 0xfffdu, (node.flags & 0x0040u) != 0, lights, lighting);
+		// SROModelTree_set_color_recursive stores alpha first, then RGB:
+		// the gun display base is (0, .03, 0), not its red texture color.
+		lighting.base[1] += gun_model ? 0.03f : 0.0f;
+		for (const MissionGpuSection& section : lod.sections)
+		{
+			if (section.suppressed || section.index_count == 0)
+			{
+				continue;
+			}
+			bgfx::setTransform(glm::value_ptr(node_transform));
+			bgfx::setVertexBuffer(0, lod.lit_vertices);
+			bgfx::setIndexBuffer(
+				lod.indices, section.first_index, section.index_count);
+			bgfx::setUniform(renderer.uv_rect_uniform, uv);
+			bgfx::setUniform(renderer.tint_uniform, tint);
+			const float diffuse[] = {material_uses_vertex_diffuse(section.mode) ? 1.0f : 0.0f,
+				0.0f, 0.0f, 0.0f};
+			bgfx::setUniform(renderer.material_diffuse_uniform, diffuse);
+			bind_gpu_mesh_lighting(renderer, lighting);
+			bgfx::setUniform(renderer.model_clip_plane_uniform, glm::value_ptr(node_clip));
+			bgfx::setTexture(
+				0, renderer.texture_sampler,
+				section.texture == UINT32_MAX ? renderer.white.handle : model.textures[section.texture].handle);
+			bgfx::ProgramHandle program = renderer.lit_model_rgba_program;
+			if (section.mode == 6 && (node.flags & 0x0080u) != 0)
+			{
+				bgfx::setTexture(1, renderer.material_texture_sampler,
+					model.alternate_textures[section.texture].handle);
+				program = renderer.lit_model_mode_six_program;
+			}
+			else if (section.mode == 7)
+			{
+				bgfx::setTexture(1, renderer.material_texture_sampler,
+					renderer.model_modifier_textures[section.modifier].handle);
+				program = renderer.lit_model_mode_seven_program;
+			}
+			else if (section.mode == 8 || section.mode == 10)
+			{
+				program = renderer.lit_model_mode_eight_program;
+			}
+			std::uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A
+				| BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_MSAA;
+			if (section.lines)
+			{
+				state |= BGFX_STATE_PT_LINES;
+			}
+			else if (!section.double_sided)
+			{
+				state |= BGFX_STATE_CULL_CW;
+			}
+			if (blended_mode(section.mode))
+			{
+				state |= material_blend_state(section.mode);
+			}
+			else
+			{
+				state |= BGFX_STATE_WRITE_Z;
+			}
+			bgfx::setState(state);
+			bgfx::submit(view, program);
+		}
+	}
 }
 
 bool mission_model_for_type(
@@ -11621,13 +11745,6 @@ bool mission_renderer_init(
 		mission_renderer_shutdown(renderer);
 		return false;
 	}
-	if (!initialize_model_modifier_textures(renderer))
-	{
-		diagnostics::mission_log(
-			"render load failed stage=model-modifier textures");
-		mission_renderer_shutdown(renderer);
-		return false;
-	}
 	assets::TextureImage shield;
 	assets::TextureImage forcefield;
 	assets::TextureImage sfx_alpha;
@@ -12137,10 +12254,6 @@ void mission_renderer_shutdown(MissionRenderer& renderer)
 	frontend_texture_shutdown(renderer.cloak_texture);
 	frontend_texture_shutdown(renderer.model_light_flare_texture);
 	frontend_texture_shutdown(renderer.model_light_core_texture);
-	for (FrontendTexture& texture : renderer.model_modifier_textures)
-	{
-		frontend_texture_shutdown(texture);
-	}
 	frontend_texture_shutdown(renderer.shield_texture);
 	frontend_texture_shutdown(renderer.forcefield_texture);
 	frontend_texture_shutdown(renderer.sfx_alpha_texture);

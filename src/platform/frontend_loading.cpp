@@ -2,6 +2,7 @@
 
 #include "assets/object_type_catalog.hpp"
 #include "assets/player_ship.hpp"
+#include "assets/texture_cache.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -25,19 +26,21 @@ bool load_tga_set(
 	return ready;
 }
 
-void convert_to_green_hologram(assets::TextureImage& image)
+bool load_hologram_materials(
+	assets::GameplayModel& model, const assets::TextureCache& cache, char prefix)
 {
-	for (std::size_t offset = 0; offset + 3 < image.pixels.size; offset += 4)
+	// Loadout_preload (0x00441aa0) selects green ship textures and
+	// red missile/gun textures through Model_convert_lod_to_sro.
+	for (assets::GameplayMaterial& material : model.materials)
 	{
-		const std::uint8_t intensity = std::max({
-			image.pixels.data[offset],
-			image.pixels.data[offset + 1],
-			image.pixels.data[offset + 2]});
-		image.pixels.data[offset] = 0;
-		image.pixels.data[offset + 1] = intensity;
-		image.pixels.data[offset + 2] =
-			static_cast<std::uint8_t>(intensity / 5);
+		char name[66];
+		std::snprintf(name, sizeof(name), "%c%s", prefix, material.basename);
+		if (!assets::texture_cache_decode(cache, name, material.image))
+		{
+			return false;
+		}
 	}
+	return true;
 }
 
 bool load_shell_stage(App& app)
@@ -217,11 +220,11 @@ bool load_briefing_loadout_stage(App& app)
 			app.vfs, "palette3.tga", app.upload_assets.loadout_palette)
 		&& ready;
 
-	static constexpr const char* kShipTextures[] = {
-		"gYank_1.tga", "gsam_3.tga", "gGRENDAL.tga", "gBrit1.tga",
-		"gYANK_2.tga", "gFRENCHY.tga", "rNtempest.tga", "gYANK_3.tga",
-		"gWOLVER.tga", "greaper.tga", "gJap_5.tga", "gYank_4.tga",
-	};
+	assets::TextureCache texture_cache;
+	// Loadout_preload (0x00441c9a) installs palette3.ccb before loading
+	// the indexed g*/r* display textures.
+	ready = assets::texture_cache_load(
+		app.vfs, "tcachehw.dat", "palette3.ccb", texture_cache) && ready;
 	static constexpr const char* kGuns[] = {
 		"predator_gun.SHP", "naginata_gun.shp", "grendal_gun.shp",
 		"crusader_gun.SHP", "coyote_gun.shp", "mirage_gun.SHP",
@@ -230,22 +233,20 @@ bool load_briefing_loadout_stage(App& app)
 	};
 	for (std::size_t index = 0; index < assets::kPlayerShipCount; ++index)
 	{
-		ready = assets::load_ship_model(
+		ready = assets::load_gameplay_model(
 			app.vfs,
 			assets::object_type_resource(
 				static_cast<std::uint16_t>(index)).model_path,
+			texture_cache,
 			app.upload_assets.loadout_ships[index])
-			&& assets::load_tga(
-				app.vfs,
-				kShipTextures[index],
-				app.upload_assets.loadout_ship_textures[index])
-			&& assets::load_ship_model(
-				app.vfs, kGuns[index], app.upload_assets.loadout_guns[index])
+			&& assets::load_gameplay_model(
+				app.vfs, kGuns[index], texture_cache,
+				app.upload_assets.loadout_guns[index])
 			&& ready;
-	}
-	if (ready)
-	{
-		convert_to_green_hologram(app.upload_assets.loadout_ship_textures[6]);
+		// Display objects use the same mass-centered model tree as gameplay
+		// (LoadoutGunModel_create -> 0x00476130 -> 0x004769f0).
+		ready = load_hologram_materials(app.upload_assets.loadout_ships[index], texture_cache, 'g') && ready;
+		ready = load_hologram_materials(app.upload_assets.loadout_guns[index], texture_cache, 'r') && ready;
 	}
 
 	static constexpr const char* kMissiles[] = {
@@ -254,18 +255,15 @@ bool load_briefing_loadout_stage(App& app)
 		"27_solomon_pod.shp", "28_imp.shp", "29_hawk_pod.shp",
 		"31_fuel_pod.SHP",
 	};
-	ready = assets::load_tga(
-		app.vfs,
-		"rMissiles.tga",
-		app.upload_assets.loadout_missile_texture)
-		&& ready;
 	for (std::size_t index = 0; index < std::size(kMissiles); ++index)
 	{
-		ready = assets::load_ship_model(
+		ready = assets::load_gameplay_model(
 			app.vfs,
 			kMissiles[index],
+			texture_cache,
 			app.upload_assets.loadout_missiles[index])
 			&& ready;
+		ready = load_hologram_materials(app.upload_assets.loadout_missiles[index], texture_cache, 'r') && ready;
 	}
 	return ready;
 }
@@ -465,9 +463,7 @@ bool frontend_upload_assets(App& app)
 			app.upload_assets.loadout_sprites,
 			app.upload_assets.loadout_ships,
 			app.upload_assets.loadout_guns,
-			app.upload_assets.loadout_ship_textures,
 			app.upload_assets.loadout_missiles,
-			app.upload_assets.loadout_missile_texture,
 			app.upload_assets.loadout_title_font,
 			app.upload_assets.loadout_info_font,
 			app.upload_assets.loadout_palette)
@@ -515,7 +511,7 @@ bool frontend_upload_assets(App& app)
 	}
 	frontend::loadout_catalog_init(
 		app.loadout_catalog,
-		app.upload_assets.loadout_ships,
+		app.frontend_renderer.loadout_renderer,
 		app.game_stats);
 	app.upload_assets = {};
 	return true;

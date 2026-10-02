@@ -108,7 +108,6 @@ add_executable(sl_open
 	src/assets/object_type_catalog.cpp
 	src/assets/refpack.cpp
 	src/assets/ship_stats.cpp
-	src/assets/ship_model.cpp
 	src/assets/sro_chunks.cpp
 	src/assets/texture_cache.cpp
 	src/assets/vfx.cpp

@@ -12,7 +12,6 @@ struct LanguageTable;
 namespace sl_open::assets
 {
 struct GameStats;
-struct ShipModel;
 }
 
 namespace sl_open::campaign
@@ -24,6 +23,8 @@ namespace sl_open::render
 {
 struct FrontendCommands;
 struct FrontendRenderer;
+struct LoadoutRenderer;
+struct MissionGpuModel;
 }
 
 namespace sl_open::frontend
@@ -64,50 +65,36 @@ struct Loadout
 	LoadoutPhase phase{LoadoutPhase::entering};
 	LoadoutPage page{LoadoutPage::ships};
 	LoadoutPage previous_page{LoadoutPage::ships};
+	LoadoutPage requested_page{LoadoutPage::ships};
 	std::uint8_t mission{1};
 	std::uint8_t selected_ship{};
 	std::uint8_t previous_ship{};
-	std::uint8_t selected_missile{};
 	std::int8_t hovered_missile{-1};
-	std::int8_t hovered_hardpoint{-1};
 	std::int16_t hovered_object{-1};
+	std::int8_t pressed_button{-1};
+	std::int8_t requested_ship{-1};
 	std::uint8_t available_ships{4};
 	std::uint16_t available_ship_mask{0x000f};
-	std::uint8_t available_missiles{3};
 	std::uint8_t missile_layout_tier{};
+	std::uint8_t selector_lod{};
 	std::uint16_t available_missile_mask{};
-	std::uint8_t difficulty{};
 	float pointer_x{};
 	float pointer_y{};
 	bool late_campaign{};
-	bool use_default_loadout{};
 	bool launch_requested{};
 	bool ship_selection_active{};
 	bool page_transition_active{};
 	std::uint64_t animation_at{};
+	std::uint64_t entered_at{};
 	std::uint64_t ship_selection_at{};
 	std::uint64_t page_transition_at{};
 	std::uint64_t spin_at{};
 	float previous_spin{};
-	std::int16_t default_loadout[20]{};
 	std::int16_t mounted_loadout[20]{};
 	bool missile_animation_active[20]{};
 	bool missile_animation_removing[20]{};
 	std::uint8_t missile_animation_item[20]{};
 	std::uint64_t missile_animation_at[20]{};
-};
-
-struct LoadoutHardpointDefinition
-{
-	glm::vec3 position{0.0f};
-	glm::mat3 basis{0.0f};
-	std::int32_t default_loadout[4]{-1, -1, -1, -1};
-};
-
-struct LoadoutShipDefinition
-{
-	LoadoutHardpointDefinition hardpoints[20]{};
-	std::uint32_t hardpoint_count{};
 };
 
 struct LoadoutShipStats
@@ -131,22 +118,25 @@ struct LoadoutMissileStats
 
 struct LoadoutCatalog
 {
-	LoadoutShipDefinition ships[12];
+	const render::MissionGpuModel* ships{};
+	const render::MissionGpuModel* missiles{};
 	LoadoutShipStats ship_stats[12];
 	LoadoutMissileStats missile_stats[10];
 };
 
 void loadout_catalog_init(
 	LoadoutCatalog& catalog,
-	const assets::ShipModel (&ships)[12],
+	const render::LoadoutRenderer& models,
 	const assets::GameStats& stats);
 void loadout_reset(
 	Loadout& loadout,
 	const campaign::CampaignState& campaign,
 	const LoadoutCatalog& catalog,
-	std::uint64_t now);
+	std::uint64_t now,
+	std::uint8_t graphics_detail);
 void loadout_begin_exit(Loadout& loadout, std::uint64_t now);
-bool loadout_update(Loadout& loadout, std::uint64_t now);
+bool loadout_update(
+	Loadout& loadout, const LoadoutCatalog& catalog, std::uint64_t now);
 bool loadout_missile_available(
 	const Loadout& loadout,
 	std::uint8_t missile);
@@ -154,8 +144,19 @@ bool loadout_pointer(
 	Loadout& loadout,
 	const LoadoutCatalog& catalog,
 	float x,
-	float y);
-LoadoutClickResult loadout_click(
+	float y,
+	std::uint64_t now);
+bool loadout_launch_button_hidden(const Loadout& loadout, std::uint64_t now);
+LoadoutClickResult loadout_launch(
+	Loadout& loadout, campaign::CampaignState& campaign, std::uint64_t now);
+LoadoutClickResult loadout_press(
+	Loadout& loadout,
+	campaign::CampaignState& campaign,
+	const LoadoutCatalog& catalog,
+	float x,
+	float y,
+	std::uint64_t now);
+LoadoutClickResult loadout_release(
 	Loadout& loadout,
 	campaign::CampaignState& campaign,
 	const LoadoutCatalog& catalog,

@@ -1,14 +1,13 @@
 #include "render/frontend_renderer.hpp"
 
 #include "assets/image.hpp"
-#include "assets/ship_model.hpp"
+#include "assets/gameplay_model.hpp"
 #include "assets/vfx.hpp"
 #include "core/blob.hpp"
 #include "render/loadout_renderer.hpp"
 
 #include <algorithm>
 #include <bit>
-#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1381,6 +1380,10 @@ void destroy_renderer_core(FrontendRenderer& renderer)
 {
 	frame_geometry_shutdown(renderer.frame_geometry);
 	destroy_texture(renderer.white);
+	for (FrontendTexture& texture : renderer.model_modifier_textures)
+	{
+		destroy_texture(texture);
+	}
 	destroy_handle(renderer.rgba_program);
 	destroy_handle(renderer.mission_rgba_program);
 	destroy_handle(renderer.indexed_program);
@@ -1577,7 +1580,8 @@ bool frontend_renderer_core_init(FrontendRenderer& renderer)
 		&& bgfx::isValid(renderer.lighting_position_radius_uniform)
 		&& bgfx::isValid(renderer.lighting_direction_type_uniform)
 		&& bgfx::isValid(renderer.lighting_color_intensity_uniform)
-		&& bgfx::isValid(renderer.white.handle);
+		&& bgfx::isValid(renderer.white.handle)
+		&& model_renderer_init_materials(renderer);
 	if (!renderer.ready)
 	{
 		destroy_renderer_core(renderer);
@@ -2763,11 +2767,9 @@ bool frontend_loadout_assets_init(
 	const assets::TextureImage& glow,
 	const assets::TextureImage& hardpoints,
 	const assets::SpriteList& sprites,
-	const assets::ShipModel (&ships)[12],
-	const assets::ShipModel (&guns)[12],
-	const assets::TextureImage (&ship_textures)[12],
-	const assets::ShipModel (&missiles)[10],
-	const assets::TextureImage& missile_texture,
+	const assets::GameplayModel (&ships)[12],
+	const assets::GameplayModel (&guns)[12],
+	const assets::GameplayModel (&missiles)[10],
 	const assets::Font& title_font,
 	const assets::Font& info_font,
 	const std::uint8_t (&palette)[256 * 4])
@@ -2796,9 +2798,7 @@ bool frontend_loadout_assets_init(
 			hardpoints,
 			ships,
 			guns,
-			ship_textures,
-			missiles,
-			missile_texture))
+			missiles))
 	{
 		return false;
 	}
@@ -4178,86 +4178,10 @@ void frontend_rgba_rotated_region(
 
 void frontend_loadout_scene(
 	FrontendCommands& commands,
-	std::uint8_t selected_ship,
-	std::uint8_t available_ships,
-	std::uint16_t available_ship_mask,
-	std::uint8_t page,
-	std::uint8_t difficulty,
-	bool use_default_loadout,
-	const std::int16_t (&mounted_loadout)[20],
-	const bool (&missile_animation_active)[20],
-	const bool (&missile_animation_removing)[20],
-	const std::uint8_t (&missile_animation_item)[20],
-	const std::uint64_t (&missile_animation_at)[20],
-	std::uint16_t available_missile_mask,
-	std::uint8_t missile_layout_tier,
-	std::uint8_t selected_missile,
-	std::int8_t hovered_hardpoint,
-	std::uint8_t previous_page,
-	float page_transition,
-	float hardpoint_zoom,
-	std::uint8_t previous_ship,
-	float ship_selection,
-	float activation,
-	bool reverse,
-	float previous_spin,
-	std::uint64_t now)
+	const LoadoutRenderState& state)
 {
 	push_command(commands, FrontendCommandType::loadout_scene);
-	LoadoutRenderState& state = commands.loadout;
-	state.selected_ship = std::min<std::uint8_t>(selected_ship, 11);
-	state.available_ships =
-		std::clamp<std::uint8_t>(available_ships, 1, 12);
-	state.available_ship_mask =
-		static_cast<std::uint16_t>(available_ship_mask & 0x0fff);
-	state.page = std::min<std::uint8_t>(page, 2);
-	state.previous_ship = std::min<std::uint8_t>(previous_ship, 11);
-	state.difficulty = difficulty;
-	state.use_default_loadout = use_default_loadout;
-	state.spin = static_cast<float>(now % 2000000)
-		* 0.0015707963611930609f;
-	state.activation = std::clamp(activation, 0.0f, 1.0f);
-	state.reverse = reverse;
-	state.previous_spin = previous_spin;
-	state.missile_mask = available_missile_mask;
-	state.missile_layout_tier =
-		std::min<std::uint8_t>(missile_layout_tier, 3);
-	state.selected_missile = selected_missile;
-	state.hovered_hardpoint = hovered_hardpoint;
-	state.previous_page = std::min<std::uint8_t>(previous_page, 2);
-	state.page_transition =
-		std::clamp(page_transition, 0.0f, 1.0f);
-	state.hardpoint_zoom =
-		std::clamp(hardpoint_zoom, 0.001f, 1.0f);
-	state.ship_selection = std::clamp(ship_selection, 0.0f, 1.0f);
-	std::copy(
-		std::begin(mounted_loadout),
-		std::end(mounted_loadout),
-		std::begin(state.mounted_loadout));
-	const std::uint64_t animation_now = static_cast<std::uint64_t>(
-		std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::steady_clock::now().time_since_epoch()).count());
-	for (std::uint8_t hardpoint = 0; hardpoint < 20; ++hardpoint)
-	{
-		state.missile_animation_active[hardpoint] =
-			missile_animation_active[hardpoint];
-		state.missile_animation_removing[hardpoint] =
-			missile_animation_removing[hardpoint];
-		state.missile_animation_item[hardpoint] =
-			missile_animation_item[hardpoint];
-		state.missile_animation_progress[hardpoint] =
-			missile_animation_active[hardpoint]
-				? std::clamp(
-					static_cast<float>(
-						animation_now > missile_animation_at[hardpoint]
-							? animation_now
-								- missile_animation_at[hardpoint]
-							: 0)
-						/ 1000.0f,
-					0.0f,
-					1.0f)
-				: 1.0f;
-	}
+	commands.loadout = state;
 }
 
 void frontend_loadout_text(

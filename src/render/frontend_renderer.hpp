@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/math.hpp"
+#include "render/model_gpu.hpp"
 
 #include <bgfx/bgfx.h>
 
@@ -11,7 +12,7 @@ namespace sl_open::assets
 {
 struct Font;
 struct TextureImage;
-struct ShipModel;
+struct GameplayModel;
 struct SpriteList;
 }
 
@@ -60,72 +61,6 @@ constexpr std::uint32_t kCreditsVisualCount = 6;
 constexpr std::uint32_t kGameplayHudShapeCount = 411;
 constexpr std::uint32_t kGameplayScoreboardShapeCount = 27;
 
-struct FrontendTexture
-{
-	FrontendTexture() = default;
-	FrontendTexture(
-		bgfx::TextureHandle texture_handle,
-		std::uint16_t texture_width,
-		std::uint16_t texture_height,
-		std::int16_t texture_offset_x,
-		std::int16_t texture_offset_y,
-		float texture_u,
-		float texture_v,
-		float texture_uv_width,
-		float texture_uv_height,
-		bool texture_owns_handle)
-		: handle(texture_handle)
-		, width(texture_width)
-		, height(texture_height)
-		, offset_x(texture_offset_x)
-		, offset_y(texture_offset_y)
-		, u(texture_u)
-		, v(texture_v)
-		, uv_width(texture_uv_width)
-		, uv_height(texture_uv_height)
-		, owns_handle(texture_owns_handle)
-	{
-	}
-	FrontendTexture(const FrontendTexture&) = delete;
-	FrontendTexture& operator=(const FrontendTexture&) = delete;
-	FrontendTexture(FrontendTexture&& other) noexcept
-	{
-		*this = static_cast<FrontendTexture&&>(other);
-	}
-	FrontendTexture& operator=(FrontendTexture&& other) noexcept
-	{
-		if (this != &other)
-		{
-			handle = std::exchange(
-				other.handle, bgfx::TextureHandle{bgfx::kInvalidHandle});
-			stream_back = std::exchange(
-				other.stream_back, bgfx::TextureHandle{bgfx::kInvalidHandle});
-			width = std::exchange(other.width, 0);
-			height = std::exchange(other.height, 0);
-			offset_x = std::exchange(other.offset_x, 0);
-			offset_y = std::exchange(other.offset_y, 0);
-			u = std::exchange(other.u, 0.0f);
-			v = std::exchange(other.v, 0.0f);
-			uv_width = std::exchange(other.uv_width, 1.0f);
-			uv_height = std::exchange(other.uv_height, 1.0f);
-			owns_handle = std::exchange(other.owns_handle, false);
-		}
-		return *this;
-	}
-
-	bgfx::TextureHandle handle{bgfx::kInvalidHandle};
-	bgfx::TextureHandle stream_back{bgfx::kInvalidHandle};
-	std::uint16_t width{};
-	std::uint16_t height{};
-	std::int16_t offset_x{};
-	std::int16_t offset_y{};
-	float u{};
-	float v{};
-	float uv_width{1.0f};
-	float uv_height{1.0f};
-	bool owns_handle{};
-};
-
 struct FrontendSpriteAtlas
 {
 	FrontendTexture pages[kMaxFrontendAtlasPages];
@@ -154,20 +89,6 @@ struct FrontendGlyph
 	std::uint16_t width{};
 };
 
-struct LoadoutMesh
-{
-	bgfx::VertexBufferHandle vertices{bgfx::kInvalidHandle};
-	bgfx::IndexBufferHandle indices{bgfx::kInvalidHandle};
-	std::uint32_t index_count{};
-};
-
-struct LoadoutHardpoint
-{
-	glm::vec3 position{0.0f};
-	glm::mat3 basis{0.0f};
-	std::int32_t default_loadout[4]{-1, -1, -1, -1};
-};
-
 enum class FrontendCommandType : std::uint8_t
 {
 	rgba_quad,
@@ -185,21 +106,22 @@ struct LoadoutRenderState
 	std::uint8_t selected_ship{};
 	std::uint8_t available_ships{};
 	std::uint16_t available_ship_mask{};
+	std::uint8_t selector_lod{};
 	std::uint8_t page{};
 	std::uint8_t previous_ship{};
-	std::uint8_t difficulty{};
 	std::uint16_t missile_mask{};
 	std::uint8_t missile_layout_tier{};
-	std::uint8_t selected_missile{};
-	std::int8_t hovered_hardpoint{-1};
 	std::uint8_t previous_page{};
-	bool use_default_loadout{};
 	bool reverse{};
 	float spin{};
 	float activation{};
 	float ship_selection{1.0f};
 	float page_transition{1.0f};
-	float hardpoint_zoom{1.0f};
+	float page_elapsed{};
+	float name_flip{};
+	float info_flip{};
+	std::int8_t pressed_button{-1};
+	bool blink_launch{};
 	float previous_spin{};
 	std::int16_t mounted_loadout[20]{};
 	bool missile_animation_active[20]{};
@@ -304,13 +226,9 @@ struct LoadoutRenderer
 	bgfx::VertexBufferHandle glow_vertices{bgfx::kInvalidHandle};
 	FrontendTexture hardpoints;
 	bgfx::VertexBufferHandle hardpoint_vertices{bgfx::kInvalidHandle};
-	FrontendTexture ship_textures[12];
-	LoadoutMesh ship_models[12];
-	LoadoutMesh gun_models[12];
-	LoadoutHardpoint ship_hardpoints[12][20]{};
-	std::uint32_t ship_hardpoint_counts[12]{};
-	LoadoutMesh missile_models[10];
-	FrontendTexture missile_texture;
+	MissionGpuModel ship_models[12];
+	MissionGpuModel gun_models[12];
+	MissionGpuModel missile_models[10];
 	bool ready{};
 };
 
@@ -620,6 +538,7 @@ struct FrontendRenderer
 	bgfx::UniformHandle lighting_color_intensity_uniform{bgfx::kInvalidHandle};
 
 	FrontendTexture white;
+	FrontendTexture model_modifier_textures[8];
 	FrontendShellAssets shell;
 	FrontendCampaignAssets campaign;
 	FrontendMultiplayerAssets multiplayer;
@@ -729,11 +648,9 @@ bool frontend_loadout_assets_init(
 	const assets::TextureImage& glow,
 	const assets::TextureImage& hardpoints,
 	const assets::SpriteList& sprites,
-	const assets::ShipModel (&ships)[12],
-	const assets::ShipModel (&guns)[12],
-	const assets::TextureImage (&ship_textures)[12],
-	const assets::ShipModel (&missiles)[10],
-	const assets::TextureImage& missile_texture,
+	const assets::GameplayModel (&ships)[12],
+	const assets::GameplayModel (&guns)[12],
+	const assets::GameplayModel (&missiles)[10],
 	const assets::Font& title_font,
 	const assets::Font& info_font,
 	const std::uint8_t (&palette)[256 * 4]);
@@ -845,30 +762,7 @@ void frontend_rgba_rotated_region(
 	std::uint32_t rgba = 0xffffffff);
 void frontend_loadout_scene(
 	FrontendCommands& commands,
-	std::uint8_t selected_ship,
-	std::uint8_t available_ships,
-	std::uint16_t available_ship_mask,
-	std::uint8_t page,
-	std::uint8_t difficulty,
-	bool use_default_loadout,
-	const std::int16_t (&mounted_loadout)[20],
-	const bool (&missile_animation_active)[20],
-	const bool (&missile_animation_removing)[20],
-	const std::uint8_t (&missile_animation_item)[20],
-	const std::uint64_t (&missile_animation_at)[20],
-	std::uint16_t available_missile_mask,
-	std::uint8_t missile_layout_tier,
-	std::uint8_t selected_missile,
-	std::int8_t hovered_hardpoint,
-	std::uint8_t previous_page,
-	float page_transition,
-	float hardpoint_zoom,
-	std::uint8_t previous_ship,
-	float ship_selection,
-	float activation,
-	bool reverse,
-	float previous_spin,
-	std::uint64_t now);
+	const LoadoutRenderState& state);
 void frontend_loadout_text(
 	FrontendCommands& commands,
 	std::uint8_t panel,

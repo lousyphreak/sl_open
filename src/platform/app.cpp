@@ -7,7 +7,7 @@
 
 #include "assets/image.hpp"
 #include "assets/pilot_presentation.hpp"
-#include "assets/ship_model.hpp"
+#include "assets/gameplay_model.hpp"
 #include "assets/vfx.hpp"
 #include "audio/audio.hpp"
 #include "audio/cb97_stream.hpp"
@@ -465,15 +465,15 @@ void apply_default_multiplayer_loadout(
 	if (selected_ship < 0
 		|| selected_ship
 			>= static_cast<std::int16_t>(
-				std::size(app.loadout_catalog.ships)))
+				std::size(app.frontend_renderer.loadout_renderer.ship_models)))
 	{
 		return;
 	}
-	const sl_open::frontend::LoadoutShipDefinition& ship =
+	const sl_open::render::MissionGpuModel& ship =
 		app.loadout_catalog.ships[selected_ship];
 	const std::uint32_t hardpoint_count =
 		std::min<std::uint32_t>(
-			ship.hardpoint_count, std::size(loadout));
+			ship.hardpoints.size(), std::size(loadout));
 	for (std::uint32_t index = 0;
 		index < hardpoint_count;
 		++index)
@@ -2033,7 +2033,8 @@ void enter_multiplayer_loadout(App& app, std::uint64_t now)
 		app.loadout,
 		app.multiplayer_campaign,
 		app.loadout_catalog,
-		now);
+		now,
+		app.config.graphics_detail);
 	app.frontend_phase = FrontendPhase::multiplayer_loadout;
 	if (app.loadout_sounds.ready)
 	{
@@ -2832,7 +2833,7 @@ void enter_mission_loadout(App& app, std::uint64_t now)
 		app.loadout_ambience_voice = -1;
 	}
 	sl_open::frontend::loadout_reset(
-		app.loadout, app.campaign, app.loadout_catalog, now);
+		app.loadout, app.campaign, app.loadout_catalog, now, app.config.graphics_detail);
 	app.frontend_phase = FrontendPhase::campaign_loadout;
 	if (app.loadout_sounds.ready)
 	{
@@ -5765,7 +5766,7 @@ void update_pointer(App& app, float window_x, float window_y)
 	sl_open::frontend::mission_briefing_pointer(
 		app.mission_briefing, logical_x, logical_y);
 	if (sl_open::frontend::loadout_pointer(
-			app.loadout, app.loadout_catalog, logical_x, logical_y)
+			app.loadout, app.loadout_catalog, logical_x, logical_y, SDL_GetTicks())
 			&& (app.frontend_phase == FrontendPhase::campaign_loadout
 				|| app.frontend_phase
 					== FrontendPhase::multiplayer_loadout))
@@ -7227,13 +7228,8 @@ SDL_AppResult handle_input_event(
 				if (app.frontend_phase == FrontendPhase::campaign_loadout)
 				{
 				const sl_open::frontend::LoadoutClickResult result =
-					sl_open::frontend::loadout_click(
-					app.loadout,
-					app.campaign,
-					app.loadout_catalog,
-					590.0f,
-					40.0f,
-					SDL_GetTicks());
+					sl_open::frontend::loadout_launch(
+					app.loadout, app.campaign, SDL_GetTicks());
 				play_loadout_click_sounds(app, result);
 				if (result.launch)
 				{
@@ -7293,13 +7289,8 @@ SDL_AppResult handle_input_event(
 					== FrontendPhase::multiplayer_loadout)
 				{
 					const sl_open::frontend::LoadoutClickResult result =
-						sl_open::frontend::loadout_click(
-							app.loadout,
-							app.multiplayer_campaign,
-							app.loadout_catalog,
-							590.0f,
-							40.0f,
-							SDL_GetTicks());
+						sl_open::frontend::loadout_launch(
+							app.loadout, app.multiplayer_campaign, SDL_GetTicks());
 					play_loadout_click_sounds(app, result);
 					if (result.launch)
 					{
@@ -7430,6 +7421,30 @@ SDL_AppResult handle_input_event(
 			if (app.options.page == sl_open::frontend::OptionsPage::audio)
 			{
 				apply_audio_config(app);
+			}
+		}
+		break;
+	case SDL_EVENT_MOUSE_BUTTON_UP:
+		if (event.button.button == SDL_BUTTON_LEFT
+			&& (app.frontend_phase == FrontendPhase::campaign_loadout
+				|| app.frontend_phase == FrontendPhase::multiplayer_loadout))
+		{
+			update_pointer(app, event.button.x, event.button.y);
+			const bool multiplayer = app.frontend_phase == FrontendPhase::multiplayer_loadout;
+			const auto result = sl_open::frontend::loadout_release(app.loadout,
+				multiplayer ? app.multiplayer_campaign : app.campaign, app.loadout_catalog,
+				app.loadout.pointer_x, app.loadout.pointer_y, SDL_GetTicks());
+			play_loadout_click_sounds(app, result);
+			if (result.launch)
+			{
+				if (multiplayer)
+				{
+					begin_multiplayer_loadout_exit(app, SDL_GetTicks());
+				}
+				else
+				{
+					begin_mission_loadout_exit(app, SDL_GetTicks());
+				}
 			}
 		}
 		break;
@@ -8012,7 +8027,7 @@ SDL_AppResult handle_input_event(
 				else if (app.frontend_phase == FrontendPhase::campaign_loadout)
 				{
 				const sl_open::frontend::LoadoutClickResult result =
-					sl_open::frontend::loadout_click(
+					sl_open::frontend::loadout_press(
 					app.loadout,
 					app.campaign,
 					app.loadout_catalog,
@@ -8029,7 +8044,7 @@ SDL_AppResult handle_input_event(
 				== FrontendPhase::multiplayer_loadout)
 			{
 				const sl_open::frontend::LoadoutClickResult result =
-					sl_open::frontend::loadout_click(
+					sl_open::frontend::loadout_press(
 						app.loadout,
 						app.multiplayer_campaign,
 						app.loadout_catalog,
@@ -9148,35 +9163,52 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 			leave_mission_briefing(app, now);
 		}
 	}
-	else if (app.frontend_phase == FrontendPhase::campaign_loadout)
+	else if (app.frontend_phase == FrontendPhase::campaign_loadout
+		|| app.frontend_phase == FrontendPhase::multiplayer_loadout)
 	{
-		const sl_open::frontend::LoadoutPhase previous_phase =
-			app.loadout.phase;
-		if (sl_open::frontend::loadout_update(app.loadout, now))
+		const sl_open::frontend::LoadoutPhase previous_phase = app.loadout.phase;
+		const sl_open::frontend::LoadoutPage previous_page = app.loadout.page;
+		const bool previous_selection = app.loadout.ship_selection_active;
+		if (sl_open::frontend::loadout_update(app.loadout, app.loadout_catalog, now))
 		{
-			leave_mission_loadout(app, now);
+			if (app.frontend_phase == FrontendPhase::multiplayer_loadout)
+			{
+				(void)submit_multiplayer_prelaunch_loadout(app);
+			}
+			else
+			{
+				leave_mission_loadout(app, now);
+			}
 		}
 		else if (previous_phase == sl_open::frontend::LoadoutPhase::entering
 			&& app.loadout.phase == sl_open::frontend::LoadoutPhase::active)
 		{
 			play_fat_sample(app, app.loadout_sounds, 6);
 		}
-	}
-	else if (app.frontend_phase
-		== FrontendPhase::multiplayer_loadout)
-	{
-		const sl_open::frontend::LoadoutPhase previous_phase =
-			app.loadout.phase;
-		if (sl_open::frontend::loadout_update(app.loadout, now))
+		if (sl_open::frontend::loadout_pointer(app.loadout, app.loadout_catalog,
+			app.loadout.pointer_x, app.loadout.pointer_y, now))
 		{
-			(void)submit_multiplayer_prelaunch_loadout(app);
+			play_fat_sample(app, app.loadout_sounds, 7, 40);
 		}
-		else if (previous_phase
-				== sl_open::frontend::LoadoutPhase::entering
-			&& app.loadout.phase
-				== sl_open::frontend::LoadoutPhase::active)
+		if (!previous_selection && app.loadout.ship_selection_active)
 		{
-			play_fat_sample(app, app.loadout_sounds, 6);
+			play_fat_sample(app, app.loadout_sounds, 8);
+		}
+		if (previous_page != sl_open::frontend::LoadoutPage::guns
+			&& app.loadout.page == sl_open::frontend::LoadoutPage::guns)
+		{
+			play_fat_sample(app, app.loadout_sounds, 10);
+		}
+		if (previous_phase == sl_open::frontend::LoadoutPhase::active
+			&& app.loadout.phase == sl_open::frontend::LoadoutPhase::exiting)
+		{
+			if (app.loadout_ambience_voice >= 0)
+			{
+				sl_open::audio::fat_stop(app.audio,
+					static_cast<std::uint32_t>(app.loadout_ambience_voice));
+				app.loadout_ambience_voice = -1;
+			}
+			play_fat_sample(app, app.loadout_sounds, 2);
 		}
 	}
 	else if (app.frontend_phase

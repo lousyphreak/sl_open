@@ -4,7 +4,7 @@
 
 #include "assets/game_stats.hpp"
 #include "assets/image.hpp"
-#include "assets/ship_model.hpp"
+#include "assets/gameplay_model.hpp"
 #include "assets/vfx.hpp"
 #include "audio/audio.hpp"
 #include "audio/cb97_stream.hpp"
@@ -151,9 +151,7 @@ struct FrontendUploadAssets
 	assets::TextureImage loadout_disc[4];
 	assets::TextureImage loadout_glow;
 	assets::TextureImage loadout_hardpoints;
-	assets::TextureImage loadout_ship_textures[12];
-	assets::ShipModel loadout_missiles[10];
-	assets::TextureImage loadout_missile_texture;
+	assets::GameplayModel loadout_missiles[10];
 	assets::Font loadout_title_font;
 	assets::Font loadout_info_font;
 	std::uint8_t loadout_palette[256 * 4];
@@ -175,8 +173,8 @@ struct FrontendUploadAssets
 	assets::SpriteList early_briefing_exit_sprites;
 	assets::SpriteList late_briefing_exit_sprites;
 	assets::SpriteList loadout_sprites;
-	assets::ShipModel loadout_ships[12];
-	assets::ShipModel loadout_guns[12];
+	assets::GameplayModel loadout_ships[12];
+	assets::GameplayModel loadout_guns[12];
 	assets::SpriteList debrief_sprites;
 	assets::SpriteList restart_sprites;
 	assets::SpriteList cd_sprites;
