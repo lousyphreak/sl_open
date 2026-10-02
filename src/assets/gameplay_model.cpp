@@ -168,6 +168,7 @@ bool build_lod(
 	std::vector<std::uint32_t> output_indices;
 	std::vector<glm::vec3> output_normals;
 	std::vector<glm::vec3> output_secondary_normals;
+	std::vector<glm::vec3> output_secondary_positions;
 	constexpr std::uint32_t kFaceSuppressed = 0x00000001u;
 	constexpr std::uint32_t kFaceDoubleSided = 0x00000002u;
 	std::uint16_t current_light_channel = 0;
@@ -305,16 +306,15 @@ bool build_lod(
 			read_float(vertex + 8),
 		} - lod.origin_offset;
 		glm::vec3 secondary_normal = normal;
-		if ((node_flags & 0x0010u) != 0
+		glm::vec3 secondary_position = position;
+		if ((node_flags & 0x0030u) != 0
 			&& next != nullptr
 			&& next->vertices != nullptr
 			&& source.vertices->stride >= 0x20)
 		{
 			const std::uint32_t next_vertex =
 				io::read_le32(vertex + 0x1c);
-			// SRO tag-4 uses -1 when this vertex has no correspondence in
-			// the following LOD. Retail leaves the current normal in place
-			// for that vertex during the final-quarter LOD lighting blend.
+			// Retain current attributes for an absent LOD correspondence.
 			if (next_vertex == UINT32_MAX)
 			{
 				// secondary_normal was initialized from the current LOD.
@@ -336,11 +336,22 @@ bool build_lod(
 				const std::uint8_t* mapped =
 					next->vertices->data
 						+ next_vertex * next->vertices->stride;
-				secondary_normal = {
-					read_float(mapped + 0x0c),
-					read_float(mapped + 0x10),
-					read_float(mapped + 0x14),
-				};
+				if ((node_flags & 0x0010u) != 0)
+				{
+					secondary_normal = {
+						read_float(mapped + 0x0c),
+						read_float(mapped + 0x10),
+						read_float(mapped + 0x14),
+					};
+				}
+				if ((node_flags & 0x0020u) != 0)
+				{
+					secondary_position = glm::vec3{
+						read_float(mapped),
+						read_float(mapped + 4),
+						read_float(mapped + 8),
+					} - lod.origin_offset;
+				}
 			}
 		}
 		output_vertices.push_back({
@@ -353,6 +364,7 @@ bool build_lod(
 		});
 		output_normals.push_back(normal);
 		output_secondary_normals.push_back(secondary_normal);
+		output_secondary_positions.push_back(secondary_position);
 		// SR_mesh_calculate_bounds (LANCER.EXE 0x004c3f10), called after
 		// SRO_build_lod_mesh at 0x004a3c5c, derives these values from the
 		// completed mesh vertex stream rather than the parent SRO node.
@@ -783,6 +795,7 @@ bool build_lod(
 	lod.secondary_normals =
 		static_cast<std::vector<glm::vec3>&&>(
 			output_secondary_normals);
+	lod.secondary_positions = std::move(output_secondary_positions);
 	lod.static_lighting_rgb.assign(
 		output_vertices.size(), glm::vec3{0.0f});
 	lod.vertex_count = static_cast<std::uint32_t>(output_vertices.size());

@@ -313,12 +313,12 @@ void register_cap(
 		selected->object_index = object_index;
 		selected->object_generation = object.generation;
 		selected->model_index = model_index;
+		selected->birth_tick = simulation_tick;
 		world.shields.replacement_cursor =
 			(world.shields.replacement_cursor + 1u)
 				% kCapShieldSlotCount;
 	}
 	selected->expiry_tick = simulation_tick + 200;
-	selected->last_update_tick = simulation_tick;
 	float radius = 8000.0f;
 	if (model_index >= 0
 		&& static_cast<std::size_t>(model_index)

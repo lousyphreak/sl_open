@@ -64,6 +64,7 @@ struct GameplayLod
 	sl_open::Blob cloak_indices;
 	std::vector<glm::vec3> normals;
 	std::vector<glm::vec3> secondary_normals;
+	std::vector<glm::vec3> secondary_positions;
 	std::vector<glm::vec3> static_lighting_rgb;
 	std::vector<GameplaySection> sections;
 	std::vector<GameplaySection> cloak_sections;

@@ -418,7 +418,7 @@ void spawn_fragment_from_particle(
 	fragment.render_active = false;
 	fragment.model_resource = standard_fragment_resource(world);
 	fragment.scale =
-		1.5f * scale * (0.5f + random_normalized(world));
+		scale * (0.5f + random_normalized(world));
 	fragment.position = position;
 	fragment.velocity = velocity;
 	// The same right-to-left source-argument evaluation consumes Z, Y, X.
@@ -464,10 +464,9 @@ void spawn_explosion_fragment(
 	fragment.active = true;
 	fragment.render_active = false;
 
-	// Explosion_fragment_spawn, LANCER.EXE 0x004717d0. The resource
-	// payloads are enlarged during Explosion_system_init at
-	// 0x0046b9df..0x0046ba0f; apply those factors to the unmodified SHP
-	// resources retained by this implementation.
+	// Explosion_fragment_spawn, LANCER.EXE 0x004717d0. The initialization
+	// multipliers at 0x00471770/0x004717a0 change the first model's LOD
+	// thresholds, not its vertex positions. Only +0x48 scales this mesh.
 	bool heavy = false;
 	if (force_rock_family)
 	{
@@ -494,14 +493,13 @@ void spawn_explosion_fragment(
 			2);
 		fragment.model_resource = static_cast<std::uint16_t>(
 			88 + resource_offset);
-		fragment.scale = 2.5f * (
-			mesh_scale > 0.1f ? 2.5f : 0.75f);
+		fragment.scale = mesh_scale > 0.1f ? 2.5f : 0.75f;
 	}
 	else if (!force_rock_family)
 	{
 		fragment.model_resource = standard_fragment_resource(world);
 		fragment.scale =
-			1.5f * mesh_scale * (0.5f + random_normalized(world));
+			mesh_scale * (0.5f + random_normalized(world));
 	}
 	else
 	{

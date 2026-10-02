@@ -1424,6 +1424,7 @@ void destroy_renderer_core(FrontendRenderer& renderer)
 	destroy_handle(renderer.lighting_environment_v_uniform);
 	destroy_handle(renderer.lighting_base_uniform);
 	destroy_handle(renderer.lighting_params_uniform);
+	destroy_handle(renderer.model_morph_uniform);
 	destroy_handle(renderer.lighting_position_radius_uniform);
 	destroy_handle(renderer.lighting_direction_type_uniform);
 	destroy_handle(renderer.lighting_color_intensity_uniform);
@@ -1458,9 +1459,10 @@ bool frontend_renderer_core_init(FrontendRenderer& renderer)
 		.add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
 		.add(bgfx::Attrib::Tangent, 3, bgfx::AttribType::Float)
 		.add(bgfx::Attrib::TexCoord2, 3, bgfx::AttribType::Float)
+		.add(bgfx::Attrib::TexCoord3, 3, bgfx::AttribType::Float)
 		.end();
 	if (renderer.model_layout.getStride() != sizeof(float) * 8
-		|| renderer.lit_model_layout.getStride() != sizeof(float) * 14
+		|| renderer.lit_model_layout.getStride() != sizeof(float) * 17
 		|| !frame_geometry_init(
 			renderer.frame_geometry,
 			renderer.layout,
@@ -1572,6 +1574,8 @@ bool frontend_renderer_core_init(FrontendRenderer& renderer)
 		"u_lightingBase", bgfx::UniformType::Vec4);
 	renderer.lighting_params_uniform = bgfx::createUniform(
 		"u_lightingParams", bgfx::UniformType::Vec4);
+	renderer.model_morph_uniform = bgfx::createUniform(
+		"u_modelMorph", bgfx::UniformType::Vec4);
 	renderer.lighting_position_radius_uniform = bgfx::createUniform(
 		"u_lightingPositionRadius", bgfx::UniformType::Vec4, 32);
 	renderer.lighting_direction_type_uniform = bgfx::createUniform(

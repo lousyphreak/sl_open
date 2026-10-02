@@ -513,21 +513,19 @@ bool build_explosion_source_geometry(
 
 	const glm::mat4 model_transform = model_animation_render_transform(
 		actor, model_reference, 1.0f);
-	const glm::mat3 normal_transform = glm::transpose(
-		glm::inverse(glm::mat3(model_transform)));
+	const glm::mat3 model_rotation{model_transform};
+	output.center = glm::vec3(model_transform[3]);
 	for (std::size_t vertex = 0; vertex < output.vertices.size(); ++vertex)
 	{
 		assets::GameplayVertex& position = output.vertices[vertex];
-		const glm::vec3 transformed = glm::vec3(
-			model_transform
-				* glm::vec4(position.x, position.y, position.z, 1.0f));
+		const glm::vec3 transformed =
+			model_rotation * glm::vec3{position.x, position.y, position.z};
 		position.x = transformed.x;
 		position.y = transformed.y;
 		position.z = transformed.z;
-		output.normals[vertex] = glm::normalize(
-			normal_transform * output.normals[vertex]);
-		output.secondary_normals[vertex] = glm::normalize(
-			normal_transform * output.secondary_normals[vertex]);
+		output.normals[vertex] = model_rotation * output.normals[vertex];
+		output.secondary_normals[vertex] =
+			model_rotation * output.secondary_normals[vertex];
 	}
 	return !output.faces.empty();
 }
@@ -570,7 +568,9 @@ std::vector<ExplodingMeshGeometry> split_explosion_geometry(
 		++face_index)
 	{
 		const assets::GameplayFace& face = source.faces[face_index];
-		glm::vec3 sum{0.0f};
+		// 0x0046c0c0 adds the relative origin once after summing rotated
+		// corners. Including it per corner changes the split partitions.
+		glm::vec3 sum = source.center;
 		for (std::uint16_t corner = 0; corner < face.corner_count; ++corner)
 		{
 			const std::uint32_t corner_offset = face.first_corner + corner;
@@ -585,8 +585,7 @@ std::vector<ExplodingMeshGeometry> split_explosion_geometry(
 				continue;
 			}
 			const assets::GameplayVertex& position = source.vertices[vertex];
-			sum += glm::vec3{position.x, position.y, position.z}
-				+ source.center;
+			sum += glm::vec3{position.x, position.y, position.z};
 		}
 		for (std::uint8_t plane = 0; plane < plane_count; ++plane)
 		{
@@ -1050,7 +1049,9 @@ void explosion_mesh_breakup_world(
 		}
 		const ObjectModelReference& reference =
 			actor.model_references[reference_index];
-		if (!reference.removed && reference.model_type == 1)
+		// Retail tests the runtime node tag, not SRO's component-type field.
+		// Every ObjectModelReference represents a tag-one drawable model.
+		if (!reference.removed)
 		{
 			ExplodingMeshGeometry source;
 			if (build_explosion_source_geometry(
@@ -1177,7 +1178,7 @@ void explosion_component_breakup_world(
 	{
 		const ObjectModelReference& reference =
 			actor.model_references[reference_index];
-		if (!reference.removed && reference.model_type == 1)
+		if (!reference.removed)
 		{
 			ExplodingMeshGeometry source;
 			if (build_explosion_source_geometry(

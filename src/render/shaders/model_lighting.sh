@@ -7,6 +7,7 @@ uniform vec4 u_lightingEnvironmentU;
 uniform vec4 u_lightingEnvironmentV;
 uniform vec4 u_lightingBase;
 uniform vec4 u_lightingParams;
+uniform vec4 u_modelMorph;
 uniform vec4 u_lightingPositionRadius[32];
 uniform vec4 u_lightingDirectionType[32];
 uniform vec4 u_lightingColorIntensity[32];
@@ -16,6 +17,14 @@ uniform vec4 u_modelClipPlane;
 SAMPLER2D(s_lightingResponse, 2);
 #endif
 
+float retail_round(float value)
+{
+	float lower = floor(value);
+	float fraction = value - lower;
+	return lower + ((fraction > 0.5
+		|| (fraction == 0.5 && mod(lower, 2.0) == 1.0)) ? 1.0 : 0.0);
+}
+
 void main()
 {
 	// Retail applies its nonlinear sqrt depth only after clipping polygons
@@ -24,8 +33,9 @@ void main()
 	// near-plane intersection and removes pieces of triangles that cross it.
 	// Reverse infinite Z preserves the same near-to-far ordering while
 	// allowing hardware to clip the complete mesh at the authored plane.
-	gl_Position = mul(u_modelViewProj, vec4(a_position, 1.0));
-	v_modelClipDistance = dot(u_modelClipPlane, vec4(a_position, 1.0));
+	vec3 position = mix(a_position, a_texcoord3, u_modelMorph.x);
+	gl_Position = mul(u_modelViewProj, vec4(position, 1.0));
+	v_modelClipDistance = dot(u_modelClipPlane, vec4(position, 1.0));
 
 	float normal_blend = u_lightingParams.y;
 	float primary_weight = 1.0 - normal_blend;
@@ -57,11 +67,8 @@ void main()
 			// secondary normal and applies intensity before the lookup.
 			float sample_index = clamp(dot(
 				direction_type.xyz * rgb_intensity.w, a_normal), 0.0, 1.0) * 4095.0;
-			float lower = floor(sample_index);
-			float fraction = sample_index - lower;
 			// Retail FISTP rounds to nearest, with even ties.
-			sample_index = lower + ((fraction > 0.5
-				|| (fraction == 0.5 && mod(lower, 2.0) == 1.0)) ? 1.0 : 0.0);
+			sample_index = retail_round(sample_index);
 			float normal_dot = texture2DLod(s_lightingResponse,
 				vec2((sample_index + 0.5) / 4096.0, 0.5), 0.0).r;
 #else
@@ -114,7 +121,9 @@ void main()
 		color = min(color, vec3_splat(1.0));
 	}
 	// The CPU path stores the lit diffuse channel in normalized RGBA8.
-	color = floor(clamp(color, 0.0, 1.0) * 255.0 + 0.5) / 255.0;
+	color = clamp(color, 0.0, 1.0) * 255.0;
+	color = vec3(retail_round(color.x), retail_round(color.y),
+		retail_round(color.z)) / 255.0;
 	v_color0 =
 		mix(vec4_splat(1.0), vec4(color, 1.0), u_materialDiffuse.x)
 			* u_tint;

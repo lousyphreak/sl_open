@@ -4060,6 +4060,7 @@ void mission_session_render_frame(
 			nullptr,
 			nullptr,
 		};
+		frame.instances[frame.instance_count - 1].direct_mesh = true;
 	}
 	for (const RockChunkEffect& chunk
 		: session.world.death_effects.rock_chunks)
@@ -4079,6 +4080,7 @@ void mission_session_render_frame(
 			nullptr,
 			nullptr,
 		};
+		frame.instances[frame.instance_count - 1].direct_mesh = true;
 	}
 	for (const GunProjectile& projectile
 		: session.weapons.projectiles)

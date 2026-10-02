@@ -35,6 +35,7 @@ struct MissionGpuLod
 	std::vector<assets::GameplayVertex> cloak_source_vertices;
 	std::vector<glm::vec3> normals;
 	std::vector<glm::vec3> secondary_normals;
+	std::vector<glm::vec3> secondary_positions;
 	std::vector<glm::vec3> static_lighting_rgb;
 	std::vector<std::uint16_t> source_indices;
 	std::vector<std::uint16_t> cloak_source_indices;

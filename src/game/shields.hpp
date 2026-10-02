@@ -55,7 +55,7 @@ struct CapShieldSlot
 {
 	CapShieldHit hit[8];
 	std::uint32_t expiry_tick{};
-	std::uint32_t last_update_tick{};
+	std::uint32_t birth_tick{};
 	std::uint16_t object_index{UINT16_MAX};
 	std::uint16_t object_generation{};
 	std::int16_t model_index{-1};

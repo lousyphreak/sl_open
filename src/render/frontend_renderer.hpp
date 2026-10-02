@@ -537,6 +537,7 @@ struct FrontendRenderer
 	bgfx::UniformHandle lighting_environment_v_uniform{bgfx::kInvalidHandle};
 	bgfx::UniformHandle lighting_base_uniform{bgfx::kInvalidHandle};
 	bgfx::UniformHandle lighting_params_uniform{bgfx::kInvalidHandle};
+	bgfx::UniformHandle model_morph_uniform{bgfx::kInvalidHandle};
 	bgfx::UniformHandle lighting_position_radius_uniform{bgfx::kInvalidHandle};
 	bgfx::UniformHandle lighting_direction_type_uniform{bgfx::kInvalidHandle};
 	bgfx::UniformHandle lighting_color_intensity_uniform{bgfx::kInvalidHandle};

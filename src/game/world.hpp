@@ -158,16 +158,16 @@ struct ObjectModelReference
 	const std::vector<assets::GameplayPortal>* portals{};
 	const std::vector<assets::GameplayPointGroup>* point_groups{};
 	// LANCER.EXE 0x0046bf20 splits the live render mesh, preserving every
-	// face attribute stream and material. These point at the retained LOD0
-	// source used to reproduce that operation after the object disappears.
-	const std::vector<assets::GameplayVertex>* explosion_vertices{};
-	const std::vector<std::uint16_t>* explosion_indices{};
-	const std::vector<assets::GameplayFace>* explosion_faces{};
-	const std::vector<std::uint32_t>* explosion_face_corners{};
-	const std::vector<assets::GameplaySection>* explosion_sections{};
-	const std::vector<glm::vec3>* explosion_normals{};
-	const std::vector<glm::vec3>* explosion_secondary_normals{};
-	const std::vector<glm::vec3>* explosion_static_lighting{};
+	// face attribute stream and material. Rendering publishes the selected
+	// retained LOD here, matching the live SR render object's +0xb8 mesh.
+	mutable const std::vector<assets::GameplayVertex>* explosion_vertices{};
+	mutable const std::vector<std::uint16_t>* explosion_indices{};
+	mutable const std::vector<assets::GameplayFace>* explosion_faces{};
+	mutable const std::vector<std::uint32_t>* explosion_face_corners{};
+	mutable const std::vector<assets::GameplaySection>* explosion_sections{};
+	mutable const std::vector<glm::vec3>* explosion_normals{};
+	mutable const std::vector<glm::vec3>* explosion_secondary_normals{};
+	mutable const std::vector<glm::vec3>* explosion_static_lighting{};
 	CloakMeshRuntime cloak;
 	char name[65]{};
 	glm::mat4 local_transform{1.0f};

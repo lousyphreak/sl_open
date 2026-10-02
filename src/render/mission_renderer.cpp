@@ -338,8 +338,11 @@ struct LitModelVertex
 	float static_red;
 	float static_green;
 	float static_blue;
+	float secondary_position_x;
+	float secondary_position_y;
+	float secondary_position_z;
 };
-static_assert(sizeof(LitModelVertex) == sizeof(float) * 14);
+static_assert(sizeof(LitModelVertex) == sizeof(float) * 17);
 
 ModelRenderVertex model_render_vertex(
 	const assets::GameplayVertex& source)
@@ -2118,6 +2121,7 @@ bool upload_model(
 				source_lod.vertices.size);
 			lod.normals = source_lod.normals;
 			lod.secondary_normals = source_lod.secondary_normals;
+			lod.secondary_positions = source_lod.secondary_positions;
 			lod.static_lighting_rgb =
 				source_lod.static_lighting_rgb;
 			std::vector<LitModelVertex> lit_vertices(source_vertex_count);
@@ -2132,6 +2136,8 @@ bool upload_model(
 					lod.secondary_normals[vertex];
 				const glm::vec3& lighting =
 					lod.static_lighting_rgb[vertex];
+				const glm::vec3& secondary_position =
+					lod.secondary_positions[vertex];
 				lit_vertices[vertex] = {
 					position.x,
 					position.y,
@@ -2147,6 +2153,9 @@ bool upload_model(
 					lighting.r,
 					lighting.g,
 					lighting.b,
+					secondary_position.x,
+					secondary_position.y,
+					secondary_position.z,
 				};
 			}
 			lod.lit_vertices = bgfx::createVertexBuffer(
@@ -2448,24 +2457,36 @@ void recenter_model_with_embedded_attachments(
 
 using MissionSceneLights = std::vector<MissionSceneLight>;
 
+void set_explosion_source_mesh(
+	const game::ObjectModelReference& reference,
+	const MissionGpuLod& lod)
+{
+	reference.explosion_vertices = &lod.source_vertices;
+	reference.explosion_indices = &lod.source_indices;
+	reference.explosion_faces = &lod.source_faces;
+	reference.explosion_face_corners = &lod.source_face_corners;
+	reference.explosion_sections = &lod.source_sections;
+	reference.explosion_normals = &lod.normals;
+	reference.explosion_secondary_normals = &lod.secondary_normals;
+	reference.explosion_static_lighting = &lod.static_lighting_rgb;
+}
+
 const MissionGpuLod* choose_lod(
 	const MissionGpuNode& node,
 	float view_depth,
 	float detail_scale,
 	bool force_highest_detail = false,
-	float* normal_blend = nullptr)
+	float* lod_blend = nullptr)
 {
-	if (normal_blend != nullptr)
+	if (lod_blend != nullptr)
 	{
-		*normal_blend = 0.0f;
+		*lod_blend = 0.0f;
 	}
 	if (node.lods.empty())
 	{
 		return nullptr;
 	}
-	if (node.lods.size() == 1
-		|| (node.flags & 0x0008u) != 0
-		|| force_highest_detail)
+	if (force_highest_detail)
 	{
 		return node.lods[0].index_count == 0 ? nullptr : &node.lods[0];
 	}
@@ -2475,9 +2496,9 @@ const MissionGpuLod* choose_lod(
 		const MissionGpuLod& candidate = node.lods[index];
 		if (lod_distance < candidate.threshold)
 		{
-			if (normal_blend != nullptr
+			if (lod_blend != nullptr
 				&& index + 1 < node.lods.size()
-				&& (node.flags & 0x0010u) != 0)
+				&& (node.flags & 0x0030u) != 0)
 			{
 				const float lower =
 					index == 0
@@ -2490,7 +2511,7 @@ const MissionGpuLod* choose_lod(
 						(lod_distance - lower) / interval;
 					if (fraction >= 0.75f)
 					{
-						*normal_blend =
+						*lod_blend =
 							(fraction - 0.75f) * 4.0f;
 					}
 				}
@@ -2529,7 +2550,9 @@ void apply_mesh_lighting(
 	bool static_lighting_enabled,
 	const MissionSceneLights& lights,
 	ModelRenderVertex* output,
-	bool sine_response = false)
+	bool sine_response = false,
+	std::span<const glm::vec3> secondary_positions = {},
+	float position_blend = 0.0f)
 {
 	const std::size_t vertex_count = source_vertices.size();
 
@@ -2618,6 +2641,15 @@ void apply_mesh_lighting(
 	{
 		output[vertex] =
 			model_render_vertex(source_vertices[vertex]);
+		if (position_blend != 0.0f)
+		{
+			const glm::vec3 position = glm::mix(
+				glm::vec3{output[vertex].x, output[vertex].y, output[vertex].z},
+				secondary_positions[vertex], position_blend);
+			output[vertex].x = position.x;
+			output[vertex].y = position.y;
+			output[vertex].z = position.z;
+		}
 		const glm::vec3 environment_normal =
 			normals[vertex] * (1.0f - normal_blend)
 				+ secondary_normals[vertex] * normal_blend;
@@ -2737,6 +2769,7 @@ struct GpuMeshLighting
 	float environment_v[4]{};
 	float base[4]{};
 	float params[4]{};
+	float morph[4]{};
 	float positions_and_radii[kLightCapacity][4]{};
 	float directions_and_types[kLightCapacity][4]{};
 	float colors_and_intensities[kLightCapacity][4]{};
@@ -2752,7 +2785,8 @@ bool prepare_gpu_mesh_lighting(
 	std::uint32_t exclusion_mask,
 	bool static_lighting_enabled,
 	std::span<const MissionSceneLight> lights,
-	GpuMeshLighting& output)
+	GpuMeshLighting& output,
+	float position_blend = 0.0f)
 {
 	std::uint32_t light_count = 0;
 	glm::vec3 base{0.0f};
@@ -2859,6 +2893,7 @@ bool prepare_gpu_mesh_lighting(
 	output.params[1] = normal_blend;
 	output.params[2] = static_cast<float>(light_count);
 	output.params[3] = affected ? 1.0f : 0.0f;
+	output.morph[0] = position_blend;
 	output.light_count = static_cast<std::uint16_t>(light_count);
 	return true;
 }
@@ -2875,6 +2910,7 @@ void bind_gpu_mesh_lighting(
 		lighting.environment_v);
 	bgfx::setUniform(frontend.lighting_base_uniform, lighting.base);
 	bgfx::setUniform(frontend.lighting_params_uniform, lighting.params);
+	bgfx::setUniform(frontend.model_morph_uniform, lighting.morph);
 	if (lighting.light_count != 0)
 	{
 		bgfx::setUniform(
@@ -3274,6 +3310,10 @@ const MissionSceneLights& build_scene_lights(
 	{
 		const MissionRenderInstance instance =
 			with_planet_spin(frame.instances[index], frame.world);
+		if (instance.direct_mesh)
+		{
+			continue;
+		}
 		const MissionGpuModel& model =
 			renderer.models[static_cast<std::size_t>(instance.model)];
 		const game::WorldObject* object =
@@ -3766,7 +3806,8 @@ void submit_billboard(
 	float v1,
 	const glm::mat3& camera_orientation,
 	float height_scale = 1.0f,
-	RetailBlendSelector blend = RetailBlendSelector::additive);
+	RetailBlendSelector blend = RetailBlendSelector::additive,
+	float depth_bias = 0.0f);
 void electric_ray_midpoint_displace(
 	game::World& world,
 	glm::vec3 (&points)[17],
@@ -4709,6 +4750,7 @@ void submit_gun_projectiles(
 			MissionRenderInstance instance;
 			instance.position = projectile.position;
 			instance.orientation = projectile.orientation;
+			instance.direct_mesh = true;
 			submit_model_with_locator_children(
 				renderer,
 				shell,
@@ -5001,16 +5043,34 @@ bool submit_spherical_shields(
 			? 0
 			: frame.simulation_tick - state.last_render_tick;
 		state.last_render_tick = frame.simulation_tick;
-		for (auto& buffer : state.hit)
+		// Shield_sphere_instance_animate (0x0049e7d0) freezes the hit
+		// histories during flicker, including the update that expires it.
+		const bool flicker = state.flicker_until_tick >= 0;
+		bool forcefield_texture = flicker;
+		bool bright_flicker = false;
+		if (flicker)
 		{
-			for (std::uint32_t vertex = 0;
-				vertex < geometry.point_count;
-				++vertex)
+			if (static_cast<std::uint32_t>(state.flicker_until_tick)
+				< frame.simulation_tick)
 			{
-				buffer[vertex] = std::max(
-					0.0f,
-					buffer[vertex]
-						- static_cast<float>(elapsed) * 0.025f);
+				state.flicker_until_tick = -1;
+				forcefield_texture = false;
+			}
+			bright_flicker = (game::world_rand15(*frame.world) & 3u) == 0;
+		}
+		else
+		{
+			for (auto& buffer : state.hit)
+			{
+				for (std::uint32_t vertex = 0;
+					vertex < geometry.point_count;
+					++vertex)
+				{
+					buffer[vertex] = std::max(
+						0.0f,
+						buffer[vertex]
+							- static_cast<float>(elapsed) * 0.025f);
+				}
 			}
 		}
 		for (std::uint32_t vertex = 0;
@@ -5032,11 +5092,8 @@ bool submit_spherical_shields(
 				cosine * relative.x - sine * relative.y,
 				sine * relative.x + cosine * relative.y,
 			};
-			coordinate =
-				relative
-					+ glm::vec2{
-						state.uv_center_x,
-						state.uv_center_y};
+			// Retail stores the rotated relative UV without adding the center.
+			coordinate = relative;
 		}
 		const float center_angle =
 			static_cast<float>(elapsed) * 0.0001f;
@@ -5075,11 +5132,6 @@ bool submit_spherical_shields(
 			triangles.data,
 			geometry.indices.data(),
 			geometry.index_count * sizeof(std::uint16_t));
-		const bool flicker =
-			state.flicker_until_tick >= 0
-			&& frame.simulation_tick
-				< static_cast<std::uint32_t>(
-					state.flicker_until_tick);
 		for (std::uint32_t vertex = 0;
 			vertex < geometry.point_count;
 			++vertex)
@@ -5087,14 +5139,12 @@ bool submit_spherical_shields(
 			glm::vec3 color{0.0f};
 			if (flicker)
 			{
-				if (((frame.simulation_tick
-						+ object.random_seed) & 3u) == 0)
+				// The dark branch consumes the same per-vertex random values.
+				const float value =
+					static_cast<float>(game::world_rand15(*frame.world))
+						* (1.0f / 32767.0f);
+				if (bright_flicker)
 				{
-					const float value = static_cast<float>(
-						(object.random_seed
-							+ vertex * 0x343fdu)
-							& 0x7fffu)
-						/ 32767.0f;
 					color = {value, value, value};
 				}
 			}
@@ -5132,7 +5182,7 @@ bool submit_spherical_shields(
 		bgfx::setTexture(
 			0,
 			frontend.texture_sampler,
-			(flicker
+			(forcefield_texture
 				? renderer.forcefield_texture
 				: renderer.shield_texture).handle);
 		bgfx::setState(
@@ -5143,10 +5193,6 @@ bool submit_spherical_shields(
 				| BGFX_STATE_MSAA);
 		submit_retail_transparent(
 			renderer, frontend.mission_rgba_program);
-		if (!flicker && state.flicker_until_tick >= 0)
-		{
-			state.flicker_until_tick = -1;
-		}
 	}
 	return true;
 }
@@ -5179,64 +5225,27 @@ void submit_cap_shields(
 			slot = {};
 			continue;
 		}
-		const std::uint16_t effective =
-			assets::object_type_runtime_alias(object.type);
-		if (effective >= std::size(renderer.models)
-			|| !renderer.model_loaded[effective])
-		{
-			continue;
-		}
-		const MissionGpuModel& model = renderer.models[effective];
-		const MissionGpuNode* node = nullptr;
-		for (const MissionGpuNode& candidate : model.nodes)
-		{
-			if (candidate.runtime_model_index
-				== static_cast<std::uint16_t>(slot.model_index))
-			{
-				node = &candidate;
-				break;
-			}
-		}
-		if (node == nullptr)
-		{
-			continue;
-		}
+		const game::ObjectModelReference& reference =
+			object.model_references[slot.model_index];
+		const MissionGpuModel& model = reference.explosion_source_attachment
+			? renderer.attachment_models[reference.explosion_source_model][0]
+			: renderer.models[reference.explosion_source_model];
+		const MissionGpuNode& node = model.nodes[reference.source_node];
 		const glm::mat4 node_transform =
 			sl_open::math::model_transform(
 				object.scene_orientation,
 				1.0f,
 				object.scene_position)
-			* object.model_references[
-				static_cast<std::uint16_t>(
-					slot.model_index)].scene_transform;
-		const float view_depth =
-			(glm::transpose(frame.camera_orientation)
-				* (glm::vec3(node_transform[3])
-					- frame.camera_position)).z;
-		const MissionGpuLod* lod = choose_lod(
-			*node,
-			view_depth,
-			renderer.lod_detail_scale,
-			(object.model_references[slot.model_index].runtime_flags
-					& kRuntimeModelForceHighestDetail) != 0);
-		if (lod == nullptr
-			|| lod->source_vertices.empty()
+			* reference.scene_transform;
+		// CapShield_slot_create (0x0049f79e) clones LOD-set +0x2c,
+		// the first mesh, independently of the source's selected LOD.
+		const MissionGpuLod* lod = &node.lods[0];
+		if (lod->source_vertices.empty()
 			|| lod->source_indices.empty())
 		{
 			continue;
 		}
-		char lowercase_name[65];
-		std::strncpy(
-			lowercase_name, node->name, sizeof(lowercase_name));
-		lowercase_name[sizeof(lowercase_name) - 1] = '\0';
-		for (char& character : lowercase_name)
-		{
-			character = static_cast<char>(
-				std::tolower(
-					static_cast<unsigned char>(character)));
-		}
-		slot.forcefield =
-			std::strstr(lowercase_name, "forcefield") != nullptr;
+		slot.forcefield = reference.forcefield;
 		if (get_available_frame_vertices(frontend.frame_geometry,
 				static_cast<std::uint32_t>(
 					lod->source_vertices.size()),
@@ -5301,16 +5310,6 @@ void submit_cap_shields(
 			float v = source.v;
 			if (slot.forcefield)
 			{
-				std::uint32_t seed =
-					slot.object_generation
-						+ vertex * 0x343fdu
-						+ frame.simulation_tick * 0x269ec3u;
-				seed = seed * 0x343fdu + 0x269ec3u;
-				u = static_cast<float>((seed >> 16) & 0x7fffu)
-					/ 32767.0f;
-				seed = seed * 0x343fdu + 0x269ec3u;
-				v = static_cast<float>((seed >> 16) & 0x7fffu)
-					/ 32767.0f;
 				color.b = std::min(
 					1.0f, color.g + color.b);
 				color.g = 0.0f;
@@ -5318,10 +5317,12 @@ void submit_cap_shields(
 			else
 			{
 				glm::vec2 relative{u - 0.5f, v - 0.5f};
+				// Rotation about a fixed center preserves radius, so integrating
+				// from creation reproduces the retained UV animation directly.
 				const float angle =
 					static_cast<float>(
 						frame.simulation_tick
-							- slot.last_update_tick)
+							- slot.birth_tick)
 						* 0.001f
 						/ glm::dot(relative, relative);
 				const float cosine = std::cos(angle);
@@ -5340,8 +5341,34 @@ void submit_cap_shields(
 				v,
 			};
 		}
-		slot.last_update_tick = frame.simulation_tick;
-		// CapShield_create (LANCER.EXE 0x0049f790) clones the selected
+		if (slot.forcefield)
+		{
+			// Retail randomizes the face-corner UV stream. Expanded GPU fan
+			// triangles share those values rather than drawing new randoms.
+			for (const assets::GameplayFace& face : lod->source_faces)
+			{
+				for (std::uint32_t corner = 0; corner < face.corner_count; ++corner)
+				{
+					assets::GameplayVertex& vertex = output[
+						lod->source_face_corners[face.first_corner + corner]];
+					vertex.u = static_cast<float>(game::world_rand15(*frame.world))
+						* (1.0f / 32767.0f);
+					vertex.v = static_cast<float>(game::world_rand15(*frame.world))
+						* (1.0f / 32767.0f);
+				}
+				for (std::uint32_t triangle = 1;
+					triangle + 2 < face.corner_count;
+					++triangle)
+				{
+					const std::uint32_t first = face.first_index + triangle * 3;
+					output[first].u = output[face.first_index].u;
+					output[first].v = output[face.first_index].v;
+					output[first + 1].u = output[first - 1].u;
+					output[first + 1].v = output[first - 1].v;
+				}
+			}
+		}
+		// CapShield_create (LANCER.EXE 0x0049f790) clones the first
 		// SRO mesh with mesh-pass flag 0x800, clears face-policy bit zero
 		// on every face, and rewrites every material to selector one.
 		// Submit every retained face without culling: 0x800 globally
@@ -5570,14 +5597,14 @@ void electric_ray_midpoint_displace(
 {
 	const std::uint32_t middle = (left + right) >> 1u;
 	const glm::vec3 base = (points[left] + points[right]) * 0.5f;
-	glm::vec3 direction{
-		(static_cast<float>(game::world_rand15(world)) / 32767.0f
-			- 0.5f) * 6.2831853071795864769f,
-		(static_cast<float>(game::world_rand15(world)) / 32767.0f
-			- 0.5f) * 6.2831853071795864769f,
-		(static_cast<float>(game::world_rand15(world)) / 32767.0f
-			- 0.5f) * 6.2831853071795864769f,
-	};
+	// ERAYFX_midpoint_displace (0x0046aa70) draws Z, then Y, then X.
+	const float z = (static_cast<float>(game::world_rand15(world)) / 32767.0f
+		- 0.5f) * 6.2831853071795864769f;
+	const float y = (static_cast<float>(game::world_rand15(world)) / 32767.0f
+		- 0.5f) * 6.2831853071795864769f;
+	const float x = (static_cast<float>(game::world_rand15(world)) / 32767.0f
+		- 0.5f) * 6.2831853071795864769f;
+	glm::vec3 direction{x, y, z};
 	const float direction_length = glm::length(direction);
 	if (direction_length > 0.0f)
 	{
@@ -6395,7 +6422,7 @@ void submit_missile_trails(
 				renderer.missile_trail_texture,
 				frame.camera_position,
 				trail.glow_position,
-				trail.glow_size,
+				trail.glow_size * 2.0f,
 				packed_effect_color(1.0f, 1.0f),
 				0.0f,
 				0.0f,
@@ -6403,7 +6430,8 @@ void submit_missile_trails(
 				1.0f,
 				frame.camera_orientation,
 				1.0f,
-				RetailBlendSelector::additive);
+				RetailBlendSelector::additive,
+				-trail.glow_size);
 		}
 	}
 }
@@ -7034,7 +7062,8 @@ void submit_billboard(
 	float v1,
 	const glm::mat3& camera_orientation,
 	float height_scale,
-	RetailBlendSelector blend)
+	RetailBlendSelector blend,
+	float depth_bias)
 {
 	if (!bgfx::isValid(texture.handle)
 		|| get_available_frame_vertices(frontend.frame_geometry, 6, frontend.layout) < 6)
@@ -7046,12 +7075,29 @@ void submit_billboard(
 	const glm::vec3 up =
 		camera_orientation[1] * (half * height_scale);
 	const glm::vec3 relative_position = position - camera_position;
-	const glm::vec3 points[4] = {
+	glm::vec3 points[4] = {
 		relative_position - right + up,
 		relative_position + right + up,
 		relative_position - right - up,
 		relative_position + right - up,
 	};
+	if (depth_bias != 0.0f)
+	{
+		// SR_bmopipe (0x004ce4d0) projects the rectangle at its original
+		// depth, then biases only the depth used for occlusion. Move along
+		// each camera ray so the GPU keeps those same screen coordinates.
+		const float depth = glm::dot(relative_position, camera_orientation[2]);
+		if (depth < kMissionNearPlane)
+		{
+			return;
+		}
+		const float depth_scale =
+			std::max(depth + depth_bias, kMissionNearPlane) / depth;
+		for (glm::vec3& point : points)
+		{
+			point *= depth_scale;
+		}
+	}
 	const glm::vec2 uv[4] = {
 		{u0, v0}, {u1, v0}, {u0, v1}, {u1, v1},
 	};
@@ -7191,7 +7237,8 @@ void submit_particle_effects(
 			1.0f,
 			explosion.alternate_atlas
 				? RetailBlendSelector::additive
-				: RetailBlendSelector::premultiplied_alpha);
+				: RetailBlendSelector::premultiplied_alpha,
+			-explosion.size);
 	}
 	for (const game::PowercoreEffect& powercore
 		: frame.world->death_effects.powercores)
@@ -7225,7 +7272,7 @@ void submit_particle_effects(
 			renderer.powercore_texture,
 			frame.camera_position,
 			glm::vec3(transform[3]),
-			powercore.size,
+			powercore.size * 2.0f,
 			0xffffffffu,
 			0.0f,
 			0.0f,
@@ -8436,10 +8483,6 @@ void submit_instance_pass(
 			instance.orientation * wobble,
 			instance.scale,
 			instance.position);
-	const bool ship_model =
-		instance.source_object != nullptr
-		&& instance.source_object->collision_class >= 1
-		&& instance.source_object->collision_class <= 3;
 	const bgfx::ViewId opaque_view = instance.foreground_overlay
 		? kMissionCockpitView
 		: kMissionView;
@@ -8458,6 +8501,13 @@ void submit_instance_pass(
 		const std::uint32_t node_index =
 			model.node_indices_in_preorder[preorder_index];
 		const MissionGpuNode& node = model.nodes[node_index];
+		// Explosion_fragment_spawn/Rock_chunk_create (0x004717d0/0x00472a00)
+		// pass the first SRO LOD set straight to SR_mesh_create. They never
+		// instantiate the model tree, exported translations, or locators.
+		if (instance.direct_mesh && node_index != 0)
+		{
+			continue;
+		}
 		if (node.runtime_model_index >= instance.submitted_node_count)
 		{
 			continue;
@@ -8495,7 +8545,7 @@ void submit_instance_pass(
 		{
 			continue;
 		}
-		if (runtime_model == nullptr
+		if (!instance.direct_mesh && runtime_model == nullptr
 			&& (node.flags & 0x0004u) != 0)
 		{
 			continue;
@@ -8519,14 +8569,19 @@ void submit_instance_pass(
 		// source model node. The model service walks the node before those
 		// children, while scene insertion prepends every drawable. Emit the
 		// children first here to reproduce the resulting reverse preorder.
-		submit_children(node_index);
+		if (!instance.direct_mesh)
+		{
+			submit_children(node_index);
+		}
 		const bool cloak_node =
 			cloak_active
 			&& cloak_runtime != nullptr
 			&& cloak_runtime->installed;
 		const glm::mat4 transform =
 			node_root
-				* (runtime_model != nullptr
+				* (instance.direct_mesh
+					? glm::mat4{1.0f}
+					: runtime_model != nullptr
 					? runtime_model->scene_transform
 					: instance.node_transform_override != nullptr
 						? instance.node_transform_override[
@@ -8571,44 +8626,34 @@ void submit_instance_pass(
 		const glm::vec4& model_clip_plane = explosion_clipped
 			? local_explosion_clip_plane
 			: disabled_model_clip;
-		float normal_blend = 0.0f;
-		const MissionGpuLod* lod = nullptr;
-		if (ship_model)
-		{
-			// Ship rendering submits every enabled model-tree node at its
-			// authored highest-detail LOD. Runtime visibility above remains
-			// the sole per-part policy; distance and per-node bounds never
-			// remove an otherwise-live ship section.
-			if (!node.lods.empty() && node.lods[0].index_count != 0)
-			{
-				lod = &node.lods[0];
-			}
-		}
-		else
-		{
-			// Non-ship models retain retail depth-based LOD selection.
-			// SR_mesh_select_lod_and_classify_aabb (0x004c5fb0) uses the
-			// node origin's camera-space Z divided by the detail scalar.
-			const float view_depth =
-				(glm::transpose(frame.camera_orientation)
-					* (glm::vec3(transform[3])
-						- frame.camera_position)).z;
-			lod = choose_lod(
-				node,
-				view_depth,
-				renderer.lod_detail_scale,
-				runtime_model != nullptr
-					&& (runtime_model->runtime_flags
-						& kRuntimeModelForceHighestDetail) != 0,
-				&normal_blend);
-		}
+		float lod_blend = 0.0f;
+		// SR_mesh_select_lod_and_classify_aabb (0x004c5fb0) uses the node
+		// origin's camera-space Z for ships as well as other model trees.
+		// A single-LOD set still has a cutoff; source SRO flag 8 is unused.
+		const float view_depth =
+			(glm::transpose(frame.camera_orientation)
+				* (glm::vec3(transform[3]) - frame.camera_position)).z;
+		const MissionGpuLod* lod = choose_lod(
+			node,
+			view_depth,
+			renderer.lod_detail_scale,
+			runtime_model != nullptr
+				&& (runtime_model->runtime_flags
+					& kRuntimeModelForceHighestDetail) != 0,
+			instance.direct_mesh ? nullptr : &lod_blend);
 		if (lod == nullptr
 			|| !bgfx::isValid(lod->indices))
 		{
 			continue;
 		}
+		const float normal_blend = (node.flags & 0x0010u) != 0 ? lod_blend : 0.0f;
+		const float position_blend = (node.flags & 0x0020u) != 0 ? lod_blend : 0.0f;
 		const std::size_t lod_index = static_cast<std::size_t>(
 			lod - node.lods.data());
+		if (runtime_model != nullptr)
+		{
+			set_explosion_source_mesh(*runtime_model, *lod);
+		}
 		if (cloak_runtime != nullptr
 			&& lod_index <= UINT16_MAX)
 		{
@@ -8633,7 +8678,7 @@ void submit_instance_pass(
 		// remains only for the gameplay respawn material.
 		const bool clip_polygons = local_clip_plane != nullptr;
 		const bool static_lighting_enabled =
-			(node.flags & 0x0040u) != 0
+			!instance.direct_mesh && (node.flags & 0x0040u) != 0
 			&& (runtime_model == nullptr
 				|| (runtime_model->render_flags
 					& 0x00040000u) != 0);
@@ -8647,7 +8692,7 @@ void submit_instance_pass(
 				&& node.subsystem_highlightable
 				&& (node.flags & 0x0004u) == 0;
 		const std::uint32_t exclusion_mask =
-			runtime_model != nullptr
+			instance.direct_mesh ? 0u : runtime_model != nullptr
 				? runtime_model->light_exclusion_mask
 				: ((model.root_flags
 					& assets::kGameplayModelRootCompound) == 0
@@ -8668,7 +8713,8 @@ void submit_instance_pass(
 				exclusion_mask,
 				static_lighting_enabled,
 				scene_lights,
-				gpu_lighting_constants);
+				gpu_lighting_constants,
+				position_blend);
 		FrameVertexBuffer lighting_buffer;
 		bool have_lighting_buffer = false;
 		if (!gpu_lighting
@@ -8699,7 +8745,9 @@ void submit_instance_pass(
 				scene_lights,
 				reinterpret_cast<ModelRenderVertex*>(
 					lighting_buffer.data),
-				planet);
+				planet,
+				lod->secondary_positions,
+				position_blend);
 			if (highlighted)
 			{
 				auto* vertices =
@@ -9660,14 +9708,17 @@ void submit_model_with_locator_children(
 						renderer.model_light_flare_texture,
 						frame.camera_position,
 						position,
-						locator.dimensions.y * 7.0f
+						locator.dimensions.y * 14.0f
 							* distance_size * instance.scale,
 						pack_lighting_rgb(primary),
 						0.0f,
 						0.0f,
 						1.0f,
 						1.0f,
-						frame.camera_orientation);
+						frame.camera_orientation,
+						1.0f,
+						RetailBlendSelector::additive,
+						locator.dimensions.x * -2.25f);
 					// The second 0x64-byte Light BMO record switches to
 					// `newlight`, retains the authored secondary color,
 					// and is zeroed at the ends of the cycle.
@@ -9679,7 +9730,7 @@ void submit_model_with_locator_children(
 							renderer.model_light_core_texture,
 							frame.camera_position,
 							position,
-							locator.dimensions.y * 0.3f
+							locator.dimensions.y * 0.6f
 								* instance.scale,
 							pack_lighting_rgb(
 								dynamic_locator_flare_color(
@@ -9688,7 +9739,10 @@ void submit_model_with_locator_children(
 							0.0f,
 							1.0f,
 							1.0f,
-							frame.camera_orientation);
+							frame.camera_orientation,
+							1.0f,
+							RetailBlendSelector::additive,
+							locator.dimensions.x * -2.25f);
 					}
 				}
 			}
@@ -10544,15 +10598,7 @@ void initialize_embedded_model_reference(
 	reference.portals = &node.portals;
 	if (!node.lods.empty())
 	{
-		const MissionGpuLod& lod = node.lods[0];
-		reference.explosion_vertices = &lod.source_vertices;
-		reference.explosion_indices = &lod.source_indices;
-		reference.explosion_faces = &lod.source_faces;
-		reference.explosion_face_corners = &lod.source_face_corners;
-		reference.explosion_sections = &lod.source_sections;
-		reference.explosion_normals = &lod.normals;
-		reference.explosion_secondary_normals = &lod.secondary_normals;
-		reference.explosion_static_lighting = &lod.static_lighting_rgb;
+		set_explosion_source_mesh(reference, node.lods[0]);
 	}
 	reference.explosion_source_model = source_model;
 	reference.explosion_source_attachment = source_attachment;
@@ -11164,22 +11210,7 @@ void mission_renderer_initialize_world_components(
 				reference.portals = &node.portals;
 				if (!node.lods.empty())
 				{
-					const MissionGpuLod& lod = node.lods[0];
-					reference.explosion_vertices =
-						&lod.source_vertices;
-					reference.explosion_indices =
-						&lod.source_indices;
-					reference.explosion_faces =
-						&lod.source_faces;
-					reference.explosion_face_corners =
-						&lod.source_face_corners;
-					reference.explosion_sections =
-						&lod.source_sections;
-					reference.explosion_normals = &lod.normals;
-					reference.explosion_secondary_normals =
-						&lod.secondary_normals;
-					reference.explosion_static_lighting =
-						&lod.static_lighting_rgb;
+					set_explosion_source_mesh(reference, node.lods[0]);
 				}
 				reference.explosion_source_model =
 					static_cast<std::uint16_t>(model_index);
@@ -11999,6 +12030,16 @@ bool mission_renderer_init(
 				resource.model_path);
 			mission_renderer_shutdown(renderer);
 			return false;
+		}
+		// Explosion_system_init acquires model[0] +0x10c, the count-prefixed
+		// LOD set. Its 1.5/2.5 multipliers extend thresholds only.
+		if (index >= 78 && index <= 91)
+		{
+			const float threshold_scale = index < 88 ? 1.5f : 2.5f;
+			for (assets::GameplayLod& lod : model.nodes[0].lods)
+			{
+				lod.threshold *= threshold_scale;
+			}
 		}
 		if (!upload_model(
 				model,

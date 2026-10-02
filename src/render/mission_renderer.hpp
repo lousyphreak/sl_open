@@ -258,6 +258,7 @@ struct MissionRenderInstance
 	const glm::mat4* node_transform_override{};
 	std::uint16_t submitted_node_count{UINT16_MAX};
 	bool foreground_overlay{};
+	bool direct_mesh{};
 };
 
 constexpr std::uint32_t kMaxMissionRenderInstances =
