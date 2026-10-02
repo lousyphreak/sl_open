@@ -18,6 +18,7 @@
 #include "mission/network_runtime.hpp"
 #include "mission/runtime.hpp"
 #include "render/retail_clip.hpp"
+#include "render/lighting_response.hpp"
 #include "frontend/loadout_layout.hpp"
 
 #include <algorithm>
@@ -1946,6 +1947,7 @@ bool upload_model(
 		const assets::GameplayNode& source_node =
 			source.nodes[node_index];
 		MissionGpuNode& node = output.nodes[node_index];
+		glm::vec3 origin_offset{0.0f};
 		std::memcpy(node.name, source_node.name, sizeof(node.name));
 		node.model_type = source_node.model_type;
 		node.part_group_id = source_node.part_group_id;
@@ -1988,6 +1990,14 @@ bool upload_model(
 			MissionGpuLod& lod = node.lods[lod_index];
 			lod.threshold = source_lod.threshold;
 			lod.radius = source_lod.radius;
+			if (lod_index == 0)
+			{
+				origin_offset = source_lod.origin_offset;
+				if (node_index == 0)
+				{
+					output.atmosphere_radius = source_lod.original_radius;
+				}
+			}
 			lod.bounds_min = source_lod.bounds_min;
 			lod.bounds_max = source_lod.bounds_max;
 			lod.index_count = source_lod.index_count;
@@ -2268,7 +2278,8 @@ bool upload_model(
 		// LOD-0 mesh point and updates GameObject+0x59c/+0x5a0..0x5b4.
 		accumulate_mesh_extent(
 			node,
-			node.object_transform,
+			node.object_transform * glm::translate(
+				glm::mat4{1.0f}, origin_offset),
 			output.radius,
 			have_bounds,
 			output.bounds_min,
@@ -2517,7 +2528,8 @@ void apply_mesh_lighting(
 	std::uint32_t exclusion_mask,
 	bool static_lighting_enabled,
 	const MissionSceneLights& lights,
-	ModelRenderVertex* output)
+	ModelRenderVertex* output,
+	bool sine_response = false)
 {
 	const std::size_t vertex_count = source_vertices.size();
 
@@ -2631,16 +2643,22 @@ void apply_mesh_lighting(
 				const glm::vec3 direction =
 					glm::normalize(
 						inverse_orientation * light.direction);
-				const float normal_dot =
-					glm::dot(
-						direction
-							* ((1.0f - normal_blend)
-								* light.intensity),
-						normals[vertex])
-					+ glm::dot(
-						direction
-							* (normal_blend * light.intensity),
+				float normal_dot;
+				if (sine_response)
+				{
+					normal_dot = lighting_response_table()[static_cast<std::size_t>(
+						std::lrint(std::clamp(glm::dot(
+							direction * light.intensity, normals[vertex]),
+							0.0f, 1.0f) * 4095.0f))];
+				}
+				else
+				{
+					normal_dot = glm::dot(
+						direction * ((1.0f - normal_blend) * light.intensity),
+						normals[vertex]) + glm::dot(
+							direction * (normal_blend * light.intensity),
 							secondary_normals[vertex]);
+				}
 				if (normal_dot > 0.0f)
 				{
 					color += normal_dot * light.rgb;
@@ -8103,6 +8121,7 @@ MissionRenderInstance with_planet_spin(
 }
 
 void submit_planet_atmospheres(
+	const MissionRenderer& renderer,
 	MissionEnvironmentRenderer& environment,
 	const FrontendRenderer& frontend,
 	const MissionRenderFrame& frame,
@@ -8154,10 +8173,11 @@ void submit_planet_atmospheres(
 			right = glm::normalize(right);
 		}
 		const glm::vec3 up = glm::normalize(glm::cross(forward, right));
+		const float radius = renderer.models[owner->type].atmosphere_radius;
 		glm::mat4 transform{1.0f};
-		transform[0] = glm::vec4(right * owner->radius, 0.0f);
-		transform[1] = glm::vec4(up * owner->radius, 0.0f);
-		transform[2] = glm::vec4(forward * owner->radius, 0.0f);
+		transform[0] = glm::vec4(right * radius, 0.0f);
+		transform[1] = glm::vec4(up * radius, 0.0f);
+		transform[2] = glm::vec4(forward * radius, 0.0f);
 		transform[3] = glm::vec4(owner->scene_position, 1.0f);
 		const MissionEnvironmentMesh* mesh =
 			&environment.planet_atmosphere;
@@ -8617,6 +8637,8 @@ void submit_instance_pass(
 			&& (runtime_model == nullptr
 				|| (runtime_model->render_flags
 					& 0x00040000u) != 0);
+		const bool planet = runtime_model != nullptr
+			&& (runtime_model->render_flags & 0x00100000u) != 0;
 		const bool highlighted =
 			node.part_group_id == instance.selected_part_group_id
 				&& runtime_model != nullptr
@@ -8676,7 +8698,8 @@ void submit_instance_pass(
 				static_lighting_enabled,
 				scene_lights,
 				reinterpret_cast<ModelRenderVertex*>(
-					lighting_buffer.data));
+					lighting_buffer.data),
+				planet);
 			if (highlighted)
 			{
 				auto* vertices =
@@ -8887,7 +8910,8 @@ void submit_instance_pass(
 					|| retained_channel_enabled);
 			bgfx::ProgramHandle material_program =
 				gpu_lighting
-					? frontend.lit_model_rgba_program
+					? planet ? frontend.planet_rgba_program
+						: frontend.lit_model_rgba_program
 					: frontend.model_rgba_program;
 			if (mode_six_channel)
 			{
@@ -8908,7 +8932,8 @@ void submit_instance_pass(
 					frontend.model_modifier_textures[
 						section.modifier].handle);
 				material_program = gpu_lighting
-					? frontend.lit_model_mode_seven_program
+					? planet ? frontend.planet_mode_seven_program
+						: frontend.lit_model_mode_seven_program
 					: frontend.model_mode_seven_program;
 			}
 			else if (section.mode == 8 || section.mode == 10)
@@ -8942,6 +8967,11 @@ void submit_instance_pass(
 			{
 				bind_gpu_mesh_lighting(
 					frontend, gpu_lighting_constants);
+				if (planet)
+				{
+					bgfx::setTexture(2, frontend.lighting_response_sampler,
+						frontend.lighting_response_texture);
+				}
 			}
 			std::uint64_t state =
 				BGFX_STATE_WRITE_RGB
@@ -11245,6 +11275,15 @@ void mission_renderer_initialize_world_components(
 					(model.root_flags
 						& assets::kGameplayModelRootCompound) == 0
 						? 3u : 0x18u;
+				if (assets::object_type_is_planet(object.type))
+				{
+					// GameObject_create_runtime, 0x00467be9..0x00467bf7:
+					// flags 0x101100 select the sine response, no baked colors,
+					// and the rotation-only path which retains the first LOD.
+					reference.render_flags = 0x00100000u;
+					reference.light_exclusion_mask = 0x37u;
+					reference.runtime_flags |= kRuntimeModelForceHighestDetail;
+				}
 				std::size_t light_channel_count = 0;
 				for (const MissionGpuLod& lod : node.lods)
 				{
@@ -11951,7 +11990,8 @@ bool mission_renderer_init(
 				texture_cache,
 				model,
 				renderer.deathmatch_mission
-					&& index < assets::kPlayerShipCount))
+					&& index < assets::kPlayerShipCount,
+				assets::object_type_is_planet(static_cast<std::uint16_t>(index))))
 		{
 			diagnostics::mission_log(
 				"render load failed stage=model-parse index=%u path=%s",
@@ -12040,6 +12080,12 @@ bool mission_renderer_init(
 	{
 		if (!renderer.model_loaded[index])
 		{
+			continue;
+		}
+		if (assets::object_type_is_planet(static_cast<std::uint16_t>(index)))
+		{
+			// Planet mesh recentering follows the retail object-bound
+			// calculation; retain the original aggregate bounds from upload.
 			continue;
 		}
 		recenter_model_with_embedded_attachments(
@@ -12771,6 +12817,7 @@ void mission_renderer_submit(
 		drawable_width);
 	submit_far_asteroids(renderer.environment, frontend, frame);
 	submit_planet_atmospheres(
+		renderer,
 		renderer.environment,
 		frontend,
 		frame,

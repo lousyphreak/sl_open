@@ -5,6 +5,12 @@
 
 namespace sl_open::assets
 {
+inline constexpr bool object_type_is_planet(std::uint16_t type)
+{
+	return (type >= 0x5f && type <= 0x69)
+		|| (type >= 0xc9 && type <= 0xd3);
+}
+
 constexpr std::size_t kObjectTypeResourceCount = 256;
 
 struct ObjectTypeResourceDefinition

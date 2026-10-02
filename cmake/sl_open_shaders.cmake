@@ -37,10 +37,12 @@ function(sl_open_compile_shader output_var source type profile platform symbol f
 			--varyingdef "${SL_OPEN_SHADER_SOURCE_DIR}/varying.def.sc"
 			-i "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bgfx.cmake/bgfx/src"
 			--Werror
+			--depends
 		DEPENDS
 			"${SL_OPEN_SHADER_SOURCE_DIR}/${source}"
 			"${SL_OPEN_SHADER_SOURCE_DIR}/varying.def.sc"
 			${SL_OPEN_SHADERC_DEPENDENCY}
+		DEPFILE "${output}.d"
 		VERBATIM)
 	set(${output_var} "${output}" PARENT_SCOPE)
 endfunction()
@@ -52,6 +54,7 @@ set(SL_OPEN_SHADER_STAGES
 	vs_mission
 	vs_model
 	vs_model_lit
+	vs_model_planet
 	fs_rgba
 	fs_indexed
 	fs_model_rgba

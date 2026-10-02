@@ -74,6 +74,9 @@ struct GameplayLod
 	std::vector<std::uint32_t> face_corners;
 	float threshold{};
 	float radius{};
+	// Planet construction recenters mesh points after publishing object bounds.
+	glm::vec3 origin_offset{0.0f};
+	float original_radius{};
 	glm::vec3 bounds_min{0.0f};
 	glm::vec3 bounds_max{0.0f};
 	std::uint32_t vertex_count{};
@@ -250,7 +253,8 @@ bool parse_gameplay_model(
 	sl_open::Blob stored,
 	const TextureCache& texture_cache,
 	GameplayModel& model,
-	bool force_cloak_mesh = false);
+	bool force_cloak_mesh = false,
+	bool planet = false);
 bool load_gameplay_model(
 	io::Vfs& vfs,
 	const char* path,

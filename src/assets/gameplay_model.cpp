@@ -145,7 +145,8 @@ bool build_lod(
 	std::uint32_t node_flags,
 	const TextureCache& texture_cache,
 	GameplayModel& model,
-	GameplayLod& lod)
+	GameplayLod& lod,
+	bool planet)
 {
 	if (source.descriptor == nullptr
 		|| source.descriptor_stride < 4
@@ -220,6 +221,61 @@ bool build_lod(
 		}
 		return true;
 	};
+	std::vector<glm::vec3> planet_normals;
+	if (planet)
+	{
+		// GameObject_create_runtime, 0x00467c43..0x00467cd6: center
+		// each LOD using its unique source points, then rebuild face and
+		// vertex normals before expanding material/UV seams for the GPU.
+		planet_normals.resize(source.vertices->count, glm::vec3{0.0f});
+		for (std::uint32_t vertex = 0; vertex < source.vertices->count; ++vertex)
+		{
+			const glm::vec3 point = read_vec3(
+				source.vertices->data + vertex * source.vertices->stride);
+			lod.origin_offset += point;
+			lod.original_radius = std::max(lod.original_radius, glm::length(point));
+		}
+		lod.origin_offset *= 1.0f / static_cast<float>(source.vertices->count);
+		for (std::uint32_t polygon_index = 0;
+			polygon_index < source.polygons->count;)
+		{
+			const std::uint8_t* polygon = source.polygons->data
+				+ polygon_index * source.polygons->stride;
+			const bool fan = can_merge_fan(polygon_index);
+			const std::uint32_t continuations = fan
+				? io::read_le32(polygon + 0x4c) : 0;
+			glm::vec3 points[3];
+			for (std::uint32_t corner = 0; corner < 3; ++corner)
+			{
+				points[corner] = read_vec3(source.vertices->data
+					+ io::read_le32(polygon + 0x0c + corner * 4)
+						* source.vertices->stride) - lod.origin_offset;
+			}
+			glm::vec3 normal = glm::cross(
+				points[1] - points[0], points[2] - points[0]);
+			if (!fan && io::read_le32(polygon + 0x48) == 3)
+			{
+				normal = -normal;
+			}
+			normal = glm::normalize(normal);
+			for (std::uint32_t corner = 0; corner < 3; ++corner)
+			{
+				planet_normals[io::read_le32(polygon + 0x0c + corner * 4)] += normal;
+			}
+			for (std::uint32_t continuation = 1;
+				continuation <= continuations; ++continuation)
+			{
+				const std::uint8_t* next_polygon = polygon
+					+ continuation * source.polygons->stride;
+				planet_normals[io::read_le32(next_polygon + 0x14)] += normal;
+			}
+			polygon_index += continuations + 1;
+		}
+		for (glm::vec3& normal : planet_normals)
+		{
+			normal = glm::normalize(normal);
+		}
+	}
 	auto append_corner = [&](
 		const std::uint8_t* polygon,
 		std::uint32_t corner) {
@@ -238,16 +294,16 @@ bool build_lod(
 		const std::uint8_t* vertex =
 			source.vertices->data
 			+ source_vertex * source.vertices->stride;
-		const glm::vec3 normal{
+		const glm::vec3 normal = planet ? planet_normals[source_vertex] : glm::vec3{
 			read_float(vertex + 0x0c),
 			read_float(vertex + 0x10),
 			read_float(vertex + 0x14),
 		};
-		const glm::vec3 position{
+		const glm::vec3 position = glm::vec3{
 			read_float(vertex),
 			read_float(vertex + 4),
 			read_float(vertex + 8),
-		};
+		} - lod.origin_offset;
 		glm::vec3 secondary_normal = normal;
 		if ((node_flags & 0x0010u) != 0
 			&& next != nullptr
@@ -1022,7 +1078,8 @@ bool parse_gameplay_model(
 	sl_open::Blob stored,
 	const TextureCache& texture_cache,
 	GameplayModel& model,
-	bool force_cloak_mesh)
+	bool force_cloak_mesh,
+	bool planet)
 {
 	model = {};
 	model.cloak_mesh_available = force_cloak_mesh;
@@ -1460,7 +1517,8 @@ bool parse_gameplay_model(
 				node.flags,
 				texture_cache,
 				model,
-				node.lods[lod]))
+				node.lods[lod],
+				planet))
 			{
 				std::fprintf(
 					stderr,
@@ -1707,7 +1765,7 @@ bool parse_gameplay_model(
 				vertices[index].z,
 			};
 			const glm::vec3 centered =
-				local + node.position - model.center_of_mass;
+				local + lod.origin_offset + node.position - model.center_of_mass;
 			radius_squared = std::max(
 				radius_squared, glm::dot(centered, centered));
 		}

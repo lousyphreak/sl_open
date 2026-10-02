@@ -5,6 +5,7 @@
 #include "assets/vfx.hpp"
 #include "core/blob.hpp"
 #include "render/loadout_renderer.hpp"
+#include "render/lighting_response.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -24,6 +25,7 @@
 #include "essl/vs_mission.sc.bin.h"
 #include "essl/vs_model.sc.bin.h"
 #include "essl/vs_model_lit.sc.bin.h"
+#include "essl/vs_model_planet.sc.bin.h"
 
 #if !defined(__EMSCRIPTEN__)
 #include "glsl/fs_indexed.sc.bin.h"
@@ -36,6 +38,7 @@
 #include "glsl/vs_mission.sc.bin.h"
 #include "glsl/vs_model.sc.bin.h"
 #include "glsl/vs_model_lit.sc.bin.h"
+#include "glsl/vs_model_planet.sc.bin.h"
 #include "spirv/fs_indexed.sc.bin.h"
 #include "spirv/fs_model_mode_eight.sc.bin.h"
 #include "spirv/fs_model_mode_seven.sc.bin.h"
@@ -46,6 +49,7 @@
 #include "spirv/vs_mission.sc.bin.h"
 #include "spirv/vs_model.sc.bin.h"
 #include "spirv/vs_model_lit.sc.bin.h"
+#include "spirv/vs_model_planet.sc.bin.h"
 #endif
 
 #if defined(_WIN32)
@@ -59,6 +63,7 @@
 #include "dxbc/vs_mission.sc.bin.h"
 #include "dxbc/vs_model.sc.bin.h"
 #include "dxbc/vs_model_lit.sc.bin.h"
+#include "dxbc/vs_model_planet.sc.bin.h"
 #endif
 
 namespace sl_open::render
@@ -162,6 +167,7 @@ enum class ShaderKind
 	mission_vertex,
 	model_vertex,
 	model_lit_vertex,
+	model_planet_vertex,
 	rgba,
 	indexed,
 	model_rgba,
@@ -213,6 +219,8 @@ ShaderBytes shader_bytes(bgfx::RendererType::Enum type, ShaderKind kind)
 		case ShaderKind::model_vertex: return shader_array(vs_model_essl);
 		case ShaderKind::model_lit_vertex:
 			return shader_array(vs_model_lit_essl);
+		case ShaderKind::model_planet_vertex:
+			return shader_array(vs_model_planet_essl);
 		case ShaderKind::rgba: return shader_array(fs_rgba_essl);
 		case ShaderKind::indexed: return shader_array(fs_indexed_essl);
 		case ShaderKind::model_rgba:
@@ -234,6 +242,8 @@ ShaderBytes shader_bytes(bgfx::RendererType::Enum type, ShaderKind kind)
 		case ShaderKind::model_vertex: return shader_array(vs_model_glsl);
 		case ShaderKind::model_lit_vertex:
 			return shader_array(vs_model_lit_glsl);
+		case ShaderKind::model_planet_vertex:
+			return shader_array(vs_model_planet_glsl);
 		case ShaderKind::rgba: return shader_array(fs_rgba_glsl);
 		case ShaderKind::indexed: return shader_array(fs_indexed_glsl);
 		case ShaderKind::model_rgba:
@@ -254,6 +264,8 @@ ShaderBytes shader_bytes(bgfx::RendererType::Enum type, ShaderKind kind)
 		case ShaderKind::model_vertex: return shader_array(vs_model_spirv);
 		case ShaderKind::model_lit_vertex:
 			return shader_array(vs_model_lit_spirv);
+		case ShaderKind::model_planet_vertex:
+			return shader_array(vs_model_planet_spirv);
 		case ShaderKind::rgba: return shader_array(fs_rgba_spirv);
 		case ShaderKind::indexed: return shader_array(fs_indexed_spirv);
 		case ShaderKind::model_rgba:
@@ -277,6 +289,8 @@ ShaderBytes shader_bytes(bgfx::RendererType::Enum type, ShaderKind kind)
 		case ShaderKind::model_vertex: return shader_array(vs_model_dxbc);
 		case ShaderKind::model_lit_vertex:
 			return shader_array(vs_model_lit_dxbc);
+		case ShaderKind::model_planet_vertex:
+			return shader_array(vs_model_planet_dxbc);
 		case ShaderKind::rgba: return shader_array(fs_rgba_dxbc);
 		case ShaderKind::indexed: return shader_array(fs_indexed_dxbc);
 		case ShaderKind::model_rgba:
@@ -1395,6 +1409,10 @@ void destroy_renderer_core(FrontendRenderer& renderer)
 	destroy_handle(renderer.lit_model_mode_six_program);
 	destroy_handle(renderer.lit_model_mode_seven_program);
 	destroy_handle(renderer.lit_model_mode_eight_program);
+	destroy_handle(renderer.planet_rgba_program);
+	destroy_handle(renderer.planet_mode_seven_program);
+	destroy_handle(renderer.lighting_response_sampler);
+	destroy_handle(renderer.lighting_response_texture);
 	destroy_handle(renderer.texture_sampler);
 	destroy_handle(renderer.material_texture_sampler);
 	destroy_handle(renderer.palette_sampler);
@@ -1501,6 +1519,18 @@ bool frontend_renderer_core_init(FrontendRenderer& renderer)
 		create_shader(ShaderKind::model_mode_eight);
 	renderer.model_mode_eight_program = bgfx::createProgram(
 		vertex_mode_eight, fragment_mode_eight, true);
+	renderer.planet_rgba_program = bgfx::createProgram(
+		create_shader(ShaderKind::model_planet_vertex),
+		create_shader(ShaderKind::model_rgba), true);
+	renderer.planet_mode_seven_program = bgfx::createProgram(
+		create_shader(ShaderKind::model_planet_vertex),
+		create_shader(ShaderKind::model_mode_seven), true);
+	renderer.lighting_response_sampler = bgfx::createUniform(
+		"s_lightingResponse", bgfx::UniformType::Sampler);
+	const auto& response = lighting_response_table();
+	renderer.lighting_response_texture = bgfx::createTexture2D(
+		4096, 1, false, 1, bgfx::TextureFormat::R32F, kTextureFlags,
+		bgfx::copy(response.data(), sizeof(response)));
 	renderer.lit_model_rgba_program = bgfx::createProgram(
 		create_shader(ShaderKind::model_lit_vertex),
 		create_shader(ShaderKind::model_rgba),

@@ -121,6 +121,8 @@ struct MissionGpuModel
 	std::uint32_t root_flags{};
 	float total_mass{};
 	float radius{};
+	// The atmosphere is constructed before retail recenters the planet mesh.
+	float atmosphere_radius{};
 };
 
 bool model_renderer_init_materials(FrontendRenderer& renderer);

@@ -518,6 +518,10 @@ struct FrontendRenderer
 	bgfx::ProgramHandle model_mode_six_program{bgfx::kInvalidHandle};
 	bgfx::ProgramHandle model_mode_seven_program{bgfx::kInvalidHandle};
 	bgfx::ProgramHandle model_mode_eight_program{bgfx::kInvalidHandle};
+	bgfx::ProgramHandle planet_rgba_program{bgfx::kInvalidHandle};
+	bgfx::ProgramHandle planet_mode_seven_program{bgfx::kInvalidHandle};
+	bgfx::UniformHandle lighting_response_sampler{bgfx::kInvalidHandle};
+	bgfx::TextureHandle lighting_response_texture{bgfx::kInvalidHandle};
 	bgfx::ProgramHandle lit_model_rgba_program{bgfx::kInvalidHandle};
 	bgfx::ProgramHandle lit_model_mode_six_program{bgfx::kInvalidHandle};
 	bgfx::ProgramHandle lit_model_mode_seven_program{bgfx::kInvalidHandle};
