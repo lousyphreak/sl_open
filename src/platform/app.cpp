@@ -2503,6 +2503,9 @@ void parse_arguments(App& app, int argc, char** argv)
 	}
 }
 
+// The retail enrbr_tag recordings are about 6 dB louder than briefing speech.
+constexpr float kBriefingExitSpeechScale = 0.5f;
+
 void apply_audio_config(App& app)
 {
 	app.audio.effects_volume = app.config.effects_volume;
@@ -2529,6 +2532,15 @@ void apply_audio_config(App& app)
 		sl_open::audio::set_spatial_mode(app.audio, sl_open::audio::SpatialMode::Standard);
 	}
 	sl_open::audio::apply_stream_gains(app.audio);
+	if (app.campaign_speech.active
+		&& app.mission_briefing.phase
+			== sl_open::frontend::MissionBriefingPhase::exit_room)
+	{
+		alSourcef(
+			app.campaign_speech.source,
+			AL_GAIN,
+			sl_open::audio::speech_gain(app.audio) * kBriefingExitSpeechScale);
+	}
 	if (app.mission_music.stream.active)
 	{
 		sl_open::audio::apply_music_gain(
@@ -9132,7 +9144,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 				sizeof(path),
 				"enrbr_tag%02u",
 				static_cast<unsigned>(app.mission_briefing.mission));
-			const sl_open::audio::Stream& stream = app.audio.streams[2];
+			const sl_open::audio::Stream& stream = app.audio.streams[1];
 			app.briefing_speech_started =
 				sl_open::audio::cb97_stream_open(
 					app.vfs,
@@ -9141,7 +9153,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 					stream.buffers,
 					false,
 					app.campaign_speech,
-					sl_open::audio::speech_gain(app.audio));
+					sl_open::audio::speech_gain(app.audio) * kBriefingExitSpeechScale);
 			if (!app.briefing_speech_started)
 			{
 				SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
